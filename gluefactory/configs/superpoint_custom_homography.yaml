@@ -1,0 +1,47 @@
+data:
+    name: homographies
+    data_dir: custom_dataset
+    image_dir: images
+    train_size: 15
+    val_size: 4
+    batch_size: 4
+    num_workers: 2
+    homography:
+        difficulty: 0.7
+        max_angle: 45
+        patch_shape: [512, 512]
+    photometric:
+        name: lg
+    load_features:
+        do: True
+        path: "custom_dataset/exports/pseudo_labels.h5"
+        collate: False
+        max_num_keypoints: 512
+        force_num_keypoints: True
+model:
+    name: two_view_pipeline
+    extractor:
+        name: extractors.superpoint_open
+        max_num_keypoints: 512
+        force_num_keypoints: True
+        detection_threshold: -1
+        nms_radius: 3
+        trainable: True
+        lambda_d: 1.0
+        dense_outputs: True
+    ground_truth:
+        name: null
+    matcher:
+        name: null
+train:
+    seed: 0
+    epochs: 40
+    log_every_iter: 1
+    eval_every_iter: 10
+    lr: 1e-4
+    lr_schedule:
+        start: 20
+        type: exp
+        on_epoch: true
+        exp_div_10: 10
+    plot: [1, 'gluefactory.visualization.visualize_batch.make_match_figures']

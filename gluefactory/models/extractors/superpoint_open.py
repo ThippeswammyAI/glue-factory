@@ -15,6 +15,7 @@ import torch.nn as nn
 
 from ..base_model import BaseModel
 from ..utils.misc import pad_and_stack
+from ...geometry.homography import warp_points_torch
 
 
 def sample_descriptors(keypoints, descriptors, s: int = 8):
@@ -83,10 +84,10 @@ class SuperPoint(BaseModel):
         "force_num_keypoints": False,
         "detection_threshold": 0.005,
         "remove_borders": 4,
-        "descriptor_dim": 256,
         "channels": [64, 64, 128, 128, 256],
-        "dense_outputs": None,
+        "dense_outputs": True,
         "weights": None,  # local path of pretrained weights
+        "lambda_d": 1.0,
     }
 
     checkpoint_url = "https://github.com/rpautrat/SuperPoint/raw/master/weights/superpoint_v6_from_tf.pth"  # noqa: E501
@@ -131,8 +132,8 @@ class SuperPoint(BaseModel):
         )
 
         # Decode the detection scores
-        scores = self.detector(features)
-        scores = torch.nn.functional.softmax(scores, 1)[:, :-1]
+        logits_raw = self.detector(features)
+        scores = torch.nn.functional.softmax(logits_raw, 1)[:, :-1]
         b, _, h, w = scores.shape
         scores = scores.permute(0, 2, 3, 1).reshape(b, h, w, self.stride, self.stride)
         scores = scores.permute(0, 1, 3, 2, 4).reshape(
@@ -206,6 +207,7 @@ class SuperPoint(BaseModel):
             "keypoints": keypoints + 0.5,
             "keypoint_scores": scores,
             "descriptors": desc.transpose(-1, -2),
+            "logits": logits_raw,
         }
         if self.conf.dense_outputs:
             pred["dense_descriptors"] = descriptors_dense
@@ -213,4 +215,106 @@ class SuperPoint(BaseModel):
         return pred
 
     def loss(self, pred, data):
-        raise NotImplementedError
+        # We need both views for training
+        assert "logits0" in pred and "logits1" in pred
+        assert "view0" in data and "view1" in data
+
+        def keypoints_to_grid(keypoints, image_shape, device):
+            """Convert keypoints to a 65-channel classification target."""
+            b = len(keypoints)
+            h, w = image_shape
+            hc, wc = h // 8, w // 8
+            targets = torch.full((b, hc, wc), 64, dtype=torch.long, device=device)
+            for i in range(b):
+                kpts = keypoints[i]
+                if len(kpts) == 0:
+                    continue
+                valid = (kpts[:, 0] >= 0) & (kpts[:, 0] < w) & (kpts[:, 1] >= 0) & (kpts[:, 1] < h)
+                kpts = kpts[valid]
+                if len(kpts) == 0:
+                    continue
+                xi = torch.clamp(torch.floor(kpts[:, 0]).long(), 0, w - 1)
+                yi = torch.clamp(torch.floor(kpts[:, 1]).long(), 0, h - 1)
+                cx = xi // 8
+                cy = yi // 8
+                ix = xi % 8
+                iy = yi % 8
+                label = iy * 8 + ix
+                targets[i, cy, cx] = label
+            return targets
+
+        # 1. Detector Loss (Cross Entropy)
+        loss_det = 0.0
+        for i in ["0", "1"]:
+            logits = pred[f"logits{i}"]
+            img = data[f"view{i}"]["image"]
+            h, w = img.shape[-2:]
+            
+            cache = data[f"view{i}"].get("cache", None)
+            if cache is None or "keypoints" not in cache:
+                raise ValueError(
+                    f"Ground-truth keypoints cache not found in view{i}. "
+                    "Ensure load_features.do is enabled and populated."
+                )
+            gt_kpts = cache["keypoints"]
+            targets = keypoints_to_grid(gt_kpts, (h, w), logits.device)
+            loss_det += torch.nn.functional.cross_entropy(logits, targets)
+        loss_det = loss_det / 2.0
+
+        # 2. Descriptor Loss (Grid-based contrastive loss)
+        assert "dense_descriptors0" in pred and "dense_descriptors1" in pred
+        desc0 = pred["dense_descriptors0"]
+        desc1 = pred["dense_descriptors1"]
+        b, c, hc, wc = desc0.shape
+        h, w = hc * 8, wc * 8
+        device = desc0.device
+
+        # Create a grid of cell centers
+        grid_y, grid_x = torch.meshgrid(
+            torch.arange(hc, device=device),
+            torch.arange(wc, device=device),
+            indexing="ij"
+        )
+        centers0 = torch.stack([grid_x, grid_y], dim=-1).float() * 8.0 + 4.0
+        centers0 = centers0.reshape(-1, 2)
+        centers1 = centers0.clone()
+
+        H_0to1 = data["H_0to1"]
+        loss_desc = 0.0
+        zeros = torch.tensor(0.0, device=device)
+
+        for i in range(b):
+            warped_centers0 = warp_points_torch(centers0[None], H_0to1[i], inverse=False)[0]
+            dist = torch.norm(warped_centers0[:, None, :] - centers1[None, :, :], dim=-1)
+            Y = (dist < 8.0).float()
+            
+            # Filter points warping outside image bounds
+            valid_warp = (warped_centers0[:, 0] >= 0) & (warped_centers0[:, 0] < w) & \
+                         (warped_centers0[:, 1] >= 0) & (warped_centers0[:, 1] < h)
+            Y = Y * valid_warp[:, None]
+
+            # Cosine similarity between dense descriptors
+            d0 = desc0[i].reshape(c, -1)
+            d1 = desc1[i].reshape(c, -1)
+            S = torch.matmul(d0.t(), d1)
+
+            loss_pos = Y * torch.max(zeros, 1.0 - S)
+            loss_neg = (1.0 - Y) * torch.max(zeros, S - 0.2)
+            loss_desc += (loss_pos + loss_neg).mean()
+
+        loss_desc = loss_desc / b
+
+        lambda_d = self.conf.lambda_d if hasattr(self.conf, "lambda_d") else 1.0
+        total_loss = loss_det + lambda_d * loss_desc
+
+        losses = {
+            "total": total_loss,
+            "detector": loss_det,
+            "descriptor": loss_desc,
+        }
+        metrics = {
+            "loss/total": total_loss.detach(),
+            "loss/detector": loss_det.detach(),
+            "loss/descriptor": loss_desc.detach(),
+        }
+        return losses, metrics
