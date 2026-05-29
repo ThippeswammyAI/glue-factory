@@ -172,7 +172,7 @@ def warp_3d_projective(loaded_imgs, depth_map, R, t, K):
     
     return warped_imgs, valid_mask, warped_coord_map
 
-def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=15, detection_threshold=0.015, nms_radius=4, warp_mode="3d", K=None):
+def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=15, detection_threshold=0.015, nms_radius=4, warp_mode="3d", K=None, return_all_warps=False):
     """
     Perform Joint Multimodal Homographic Adaptation.
     Reads synchronized images from 'nearir', 'range', 'reflectivity', and 'signal'.
@@ -226,6 +226,7 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
     
     # For saving intermediate warped samples
     warped_samples = []
+    all_warps_info = [] if return_all_warps else None
     
     # Process each modality
     for mod_name, img in loaded_imgs.items():
@@ -283,6 +284,44 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
                     "scores": scores_warped
                 })
                 
+            # If we want to capture all detailed warps for visualization
+            if return_all_warps:
+                if len(kpts_warped) > 0:
+                    if warp_mode == "3d":
+                        kpts_back_list = []
+                        scores_back_list = []
+                        for (x_prime, y_prime), score in zip(kpts_warped, scores_warped):
+                            ix_prime = int(round(x_prime))
+                            iy_prime = int(round(y_prime))
+                            if 0 <= ix_prime < w and 0 <= iy_prime < h:
+                                if valid_mask[iy_prime, ix_prime]:
+                                    x_orig = warped_coord_map[iy_prime, ix_prime, 0]
+                                    y_orig = warped_coord_map[iy_prime, ix_prime, 1]
+                                    kpts_back_list.append([x_orig, y_orig])
+                                    scores_back_list.append(score)
+                        kpts_back = np.array(kpts_back_list, dtype=np.float32) if kpts_back_list else np.zeros((0, 2), dtype=np.float32)
+                        scores_back = np.array(scores_back_list, dtype=np.float32) if scores_back_list else np.zeros((0,), dtype=np.float32)
+                    else:
+                        ones = np.ones((len(kpts_warped), 1), dtype=np.float32)
+                        kpts_homo = np.concatenate([kpts_warped, ones], axis=1)
+                        kpts_back = (H_inv @ kpts_homo.T).T
+                        kpts_back = kpts_back[:, :2] / kpts_back[:, 2:]
+                        scores_back = scores_warped
+                else:
+                    kpts_back = np.zeros((0, 2), dtype=np.float32)
+                    scores_back = np.zeros((0,), dtype=np.float32)
+                
+                all_warps_info.append({
+                    "modality": mod_name,
+                    "warp_idx": warp_idx,
+                    "image_orig": img,
+                    "image_warped": warped_img,
+                    "keypoints_warped": kpts_warped,
+                    "scores_warped": scores_warped,
+                    "keypoints_reprojected": kpts_back,
+                    "scores_reprojected": scores_back,
+                })
+
             # Inverse warp detected keypoints and splat
             if len(kpts_warped) > 0:
                 if warp_mode == "3d":
@@ -334,6 +373,8 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
     kpts_res = kpts_res[idx]
     scores_res = scores_res[idx]
     
+    if return_all_warps:
+        return kpts_res, scores_res, loaded_imgs, warped_samples, all_warps_info
     return kpts_res, scores_res, loaded_imgs, warped_samples
 
 def save_visualizations(scene_name, kpts, scores, loaded_imgs, warped_samples, output_dir):
@@ -417,6 +458,57 @@ def save_visualizations(scene_name, kpts, scores, loaded_imgs, warped_samples, o
         plt.savefig(warps_path, bbox_inches="tight", facecolor=fig_w.get_facecolor(), edgecolor="none")
         plt.close()
 
+def save_detailed_warp_visualizations(scene_name, all_warps_info, output_dir):
+    """
+    Save detailed side-by-side plots for all warped samples of a single scene:
+    Left: Warped image with detected keypoints marked.
+    Right: Original image with reprojected (back-projected) keypoints marked.
+    """
+    detailed_dir = output_dir / "detailed_warps"
+    detailed_dir.mkdir(exist_ok=True, parents=True)
+    
+    logger.info(f"Saving detailed side-by-side warp visualizations to {detailed_dir}...")
+    
+    for item in all_warps_info:
+        mod = item["modality"]
+        w_idx = item["warp_idx"]
+        img_orig = item["image_orig"]
+        img_warped = item["image_warped"]
+        kpts_w = item["keypoints_warped"]
+        kpts_rep = item["keypoints_reprojected"]
+        
+        # Normalize range maps if applicable
+        if mod == "range":
+            if img_orig.max() > 0:
+                img_orig = ((img_orig.astype(np.float32) / img_orig.max()) * 255.0).astype(np.uint8)
+            if img_warped.max() > 0:
+                img_warped = ((img_warped.astype(np.float32) / img_warped.max()) * 255.0).astype(np.uint8)
+        
+        fig, axes = plt.subplots(1, 2, figsize=(16, 6), dpi=150)
+        fig.suptitle(f"3D Projective Warp Details | Modality: {mod.upper()} | Warp Index: {w_idx}\nScene: {scene_name}", fontsize=14, color="white", weight="bold")
+        fig.patch.set_facecolor("#0b0c10")
+        
+        for ax in axes:
+            ax.set_facecolor("#0b0c10")
+            ax.axis("off")
+            
+        # Left: Warped Image with features marked
+        axes[0].imshow(img_warped, cmap="gray")
+        if len(kpts_w) > 0:
+            axes[0].scatter(kpts_w[:, 0], kpts_w[:, 1], c="#66fcf1", s=15, edgecolors="none", alpha=0.9, label="Detected Features")
+        axes[0].set_title(f"Warped Image (Features Detected: {len(kpts_w)})", color="#66fcf1", fontsize=11, pad=8)
+        
+        # Right: Original Image with reprojected features marked
+        axes[1].imshow(img_orig, cmap="gray")
+        if len(kpts_rep) > 0:
+            axes[1].scatter(kpts_rep[:, 0], kpts_rep[:, 1], c="#fc4445", s=15, edgecolors="none", alpha=0.9, label="Reprojected Features")
+        axes[1].set_title(f"Original Image (Reprojected Features: {len(kpts_rep)})", color="#fc4445", fontsize=11, pad=8)
+        
+        plt.tight_layout()
+        out_path = detailed_dir / f"{Path(scene_name).stem}_{mod}_warp_{w_idx:02d}.png"
+        plt.savefig(out_path, bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
+        plt.close()
+
 def main():
     parser = argparse.ArgumentParser(description="Multimodal Homographic Adaptation & Visualizer")
     parser.add_argument("--num_warps", type=int, default=15, help="Number of homography warps per modality")
@@ -424,6 +516,8 @@ def main():
     parser.add_argument("--nms", type=int, default=4, help="NMS radius")
     parser.add_argument("--warp_mode", type=str, default="3d", choices=["2d", "3d"], help="Warp mode: 2d homography or 3d projective")
     parser.add_argument("--camera_info", type=str, default="plan/camera.info", help="Path to camera info file for 3d intrinsics")
+    parser.add_argument("--save_detailed_warps", action="store_true", help="Save detailed side-by-side warp visualizations for a chosen scene")
+    parser.add_argument("--viz_timestamp", type=str, default="", help="Specific image filename to visualize detailed warps (defaults to first image if empty)")
     args = parser.parse_args()
     
     dataset_dir = DATA_PATH / "custom_dataset"
@@ -483,12 +577,23 @@ def main():
     # Open H5 file to write pseudo labels
     logger.info(f"Generating joint multimodal pseudo-labels and saving to {output_h5}...")
     
+    viz_name = args.viz_timestamp if args.viz_timestamp else (image_names[0] if image_names else "")
+    
     with h5py.File(output_h5, "w") as f:
         for name in tqdm(image_names, desc="Multimodal Adaptation"):
-            kpts, scores, loaded_imgs, warped_samples = multimodal_homographic_adaptation(
-                name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
-                warp_mode=args.warp_mode, K=K
-            )
+            should_save_detailed = args.save_detailed_warps and (name == viz_name)
+            
+            if should_save_detailed:
+                kpts, scores, loaded_imgs, warped_samples, all_warps_info = multimodal_homographic_adaptation(
+                    name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
+                    warp_mode=args.warp_mode, K=K, return_all_warps=True
+                )
+                save_detailed_warp_visualizations(name, all_warps_info, visualizations_dir)
+            else:
+                kpts, scores, loaded_imgs, warped_samples = multimodal_homographic_adaptation(
+                    name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
+                    warp_mode=args.warp_mode, K=K, return_all_warps=False
+                )
             
             grp = f.create_group(name)
             grp.create_dataset("keypoints", data=kpts)
