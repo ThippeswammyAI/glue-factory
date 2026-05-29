@@ -41,6 +41,7 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
     Perform Joint Multimodal Homographic Adaptation.
     Reads synchronized images from 'nearir', 'range', 'reflectivity', and 'signal'.
     Accumulates stable keypoint detections across all modalities and warps.
+    Also returns a few warped intermediate images and their corresponding keypoints for visualization.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
@@ -63,6 +64,9 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
     joint_accumulator = np.zeros((h, w), dtype=np.float32)
     global_trials = np.zeros((h, w), dtype=np.float32)
     
+    # For saving intermediate warped samples
+    warped_samples = []
+    
     # Process each modality
     for mod_name, img in loaded_imgs.items():
         # 1. Base detection on original image
@@ -80,7 +84,7 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
         global_trials += 1.0 # Original is always a valid trial for this modality
         
         # 2. Homographic adaptations for this modality
-        for _ in range(num_warps):
+        for warp_idx in range(num_warps):
             H = sample_random_homography((h, w), difficulty=0.7)
             H_inv = np.linalg.inv(H)
             
@@ -92,6 +96,14 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
                 pred_warped = model({"image": warped_tensor})
                 kpts_warped = pred_warped["keypoints"][0].cpu().numpy() - 0.5
                 scores_warped = pred_warped["keypoint_scores"][0].cpu().numpy()
+                
+            # If this is nearir and we want to keep a few visual samples
+            if mod_name == "nearir" and len(warped_samples) < 3 and len(kpts_warped) > 0:
+                warped_samples.append({
+                    "image": warped_img,
+                    "keypoints": kpts_warped,
+                    "scores": scores_warped
+                })
                 
             # Inverse warp detected keypoints and splat
             if len(kpts_warped) > 0:
@@ -129,7 +141,71 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
     kpts_res = kpts_res[idx]
     scores_res = scores_res[idx]
     
-    return kpts_res, scores_res, loaded_imgs
+    return kpts_res, scores_res, loaded_imgs, warped_samples
+
+def save_visualizations(scene_name, kpts, scores, loaded_imgs, warped_samples, output_dir):
+    """
+    Save two high-quality plots for each scene:
+    1. A 5-panel joint consensus plot.
+    2. A 4-panel intermediate warped samples plot showing the homography effects.
+    """
+    # 1. Joint Consensus Visualization
+    fig, axes = plt.subplots(1, 5, figsize=(25, 6), dpi=150)
+    fig.suptitle(f"Multimodal Homographic Adaptation Consensus\nScene: {scene_name} | Found: {len(kpts)} stable consensus keypoints", fontsize=18, color="white", weight="bold")
+    
+    fig.patch.set_facecolor("#0b0c10")
+    for ax in axes:
+        ax.set_facecolor("#0b0c10")
+        ax.axis("off")
+        
+    for idx, mod in enumerate(MODALITIES):
+        if mod in loaded_imgs:
+            axes[idx].imshow(loaded_imgs[mod], cmap="gray")
+            axes[idx].set_title(f"Modality: {mod.upper()}", color="#66fcf1", fontsize=12, pad=10)
+            
+    # Draw Joint Multimodal Consensus overlay
+    bg_img = loaded_imgs.get("nearir", list(loaded_imgs.values())[0])
+    axes[4].imshow(bg_img, cmap="gray")
+    sc = axes[4].scatter(kpts[:, 0], kpts[:, 1], c=scores, cmap="plasma", s=18, edgecolors="none", alpha=0.9)
+    axes[4].set_title("JOINT CONSENSUS PSEUDO-LABELS", color="#fc4445", fontsize=12, pad=10)
+    
+    # Add a premium colorbar for score confidence
+    cbar_ax = fig.add_axes([0.15, 0.08, 0.7, 0.03])
+    cbar = fig.colorbar(sc, cax=cbar_ax, orientation="horizontal")
+    cbar.set_label("Repeatability Consensus Score (Across all 4 Spatially-Synchronized Modalities & Warps)", color="white", fontsize=11, labelpad=5)
+    cbar.ax.xaxis.set_tick_params(color="white")
+    plt.setp(plt.getp(cbar.ax.axes, "xticklabels"), color="white")
+    
+    consensus_path = output_dir / f"{Path(scene_name).stem}_consensus.png"
+    plt.savefig(consensus_path, bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
+    plt.close()
+    
+    # 2. Intermediate Warped Detections Visualization
+    if warped_samples:
+        fig_w, axes_w = plt.subplots(1, 4, figsize=(20, 5), dpi=150)
+        fig_w.suptitle(f"Intermediate Warped Keypoint Detections (Near-IR)\nScene: {scene_name}", fontsize=16, color="white", weight="bold")
+        fig_w.patch.set_facecolor("#0b0c10")
+        
+        for ax in axes_w:
+            ax.set_facecolor("#0b0c10")
+            ax.axis("off")
+            
+        # Column 1: Original Image
+        axes_w[0].imshow(bg_img, cmap="gray")
+        axes_w[0].set_title("Original (Near-IR)", color="#66fcf1", fontsize=11, pad=10)
+        
+        # Columns 2-4: Warped views
+        for idx, sample in enumerate(warped_samples[:3]):
+            ax = axes_w[idx + 1]
+            ax.imshow(sample["image"], cmap="gray")
+            w_kpts = sample["keypoints"]
+            w_scores = sample["scores"]
+            ax.scatter(w_kpts[:, 0], w_kpts[:, 1], c=w_scores, cmap="plasma", s=10, edgecolors="none", alpha=0.8)
+            ax.set_title(f"Intermediate Warp {idx+1}", color="#fc4445", fontsize=11, pad=10)
+            
+        warps_path = output_dir / f"{Path(scene_name).stem}_warped_samples.png"
+        plt.savefig(warps_path, bbox_inches="tight", facecolor=fig_w.get_facecolor(), edgecolor="none")
+        plt.close()
 
 def main():
     parser = argparse.ArgumentParser(description="Multimodal Homographic Adaptation & Visualizer")
@@ -142,6 +218,10 @@ def main():
     images_dir = dataset_dir / "images"
     exports_dir = dataset_dir / "exports"
     exports_dir.mkdir(exist_ok=True, parents=True)
+    
+    # Directory to save individual visualization files
+    visualizations_dir = dataset_dir / "visualizations"
+    visualizations_dir.mkdir(exist_ok=True, parents=True)
     
     output_h5 = exports_dir / "pseudo_labels.h5"
     
@@ -170,64 +250,31 @@ def main():
     
     # Open H5 file to write pseudo labels
     logger.info(f"Generating joint multimodal pseudo-labels and saving to {output_h5}...")
-    sample_imgs_dict = None
-    sample_name = image_names[0]
     
     with h5py.File(output_h5, "w") as f:
         for name in tqdm(image_names, desc="Multimodal Homographic Adaptation"):
-            kpts, scores, loaded_imgs = multimodal_homographic_adaptation(
+            kpts, scores, loaded_imgs, warped_samples = multimodal_homographic_adaptation(
                 name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms
             )
-            
-            if name == sample_name:
-                sample_imgs_dict = loaded_imgs
             
             grp = f.create_group(name)
             grp.create_dataset("keypoints", data=kpts)
             grp.create_dataset("keypoint_scores", data=scores)
             
-            logger.info(f"Scene {name}: Extracted {len(kpts)} multimodal consensus pseudo-ground-truth keypoints.")
+            # Save premium individual visualizations
+            save_visualizations(name, kpts, scores, loaded_imgs, warped_samples, visualizations_dir)
             
-    # 4. Generate premium visual validation image showing all 4 modalities and consensus
-    logger.info("Generating premium multimodal dataset visual validation samples...")
-    with h5py.File(output_h5, "r") as f:
-        kpts = f[sample_name]["keypoints"][:]
-        scores = f[sample_name]["keypoint_scores"][:]
-        
-    fig, axes = plt.subplots(1, 5, figsize=(25, 6), dpi=150)
-    fig.suptitle(f"Multimodal Homographic Adaptation Consensus Verification\nScene: {sample_name} | Found: {len(kpts)} stable consensus keypoints", fontsize=18, color="white", weight="bold")
-    
-    fig.patch.set_facecolor("#0b0c10")
-    for ax in axes:
-        ax.set_facecolor("#0b0c10")
-        ax.axis("off")
-        
-    # Draw individual modalities
-    for idx, mod in enumerate(MODALITIES):
-        if mod in sample_imgs_dict:
-            axes[idx].imshow(sample_imgs_dict[mod], cmap="gray")
-            axes[idx].set_title(f"Modality: {mod.upper()}", color="#66fcf1", fontsize=12, pad=10)
-        else:
-            axes[idx].text(0.5, 0.5, f"{mod.upper()}\nNot Found", color="red", ha="center", va="center")
+            logger.info(f"Scene {name}: Extracted {len(kpts)} keypoints and saved visual plots.")
             
-    # Draw Joint Multimodal Consensus overlay
-    bg_img = sample_imgs_dict.get("nearir", list(sample_imgs_dict.values())[0])
-    axes[4].imshow(bg_img, cmap="gray")
-    sc = axes[4].scatter(kpts[:, 0], kpts[:, 1], c=scores, cmap="plasma", s=18, edgecolors="none", alpha=0.9)
-    axes[4].set_title("JOINT CONSENSUS PSEUDO-LABELS", color="#fc4445", fontsize=12, pad=10)
-    
-    # Add a premium colorbar for score confidence
-    cbar_ax = fig.add_axes([0.15, 0.08, 0.7, 0.03])
-    cbar = fig.colorbar(sc, cax=cbar_ax, orientation="horizontal")
-    cbar.set_label("Repeatability Consensus Score (Across all 4 Spatially-Synchronized Modalities & Warps)", color="white", fontsize=11, labelpad=5)
-    cbar.ax.xaxis.set_tick_params(color="white")
-    plt.setp(plt.getp(cbar.ax.axes, "xticklabels"), color="white")
-    
-    viz_output = dataset_dir / "adaptation_visualization.png"
-    plt.savefig(viz_output, bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
-    plt.close()
-    
-    logger.info(f"Visual validation saved to {viz_output} successfully!")
+    # Copy the first scene visualization as the default overview
+    sample_stem = Path(image_names[0]).stem
+    default_consensus = visualizations_dir / f"{sample_stem}_consensus.png"
+    default_overview = dataset_dir / "adaptation_visualization.png"
+    if default_consensus.exists():
+        import shutil
+        shutil.copy(default_consensus, default_overview)
+        
+    logger.info(f"All processing complete! Individual visualization files saved in {visualizations_dir}")
 
 if __name__ == "__main__":
     main()
