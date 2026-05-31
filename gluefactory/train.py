@@ -103,6 +103,8 @@ def do_evaluation(model, loader, device, loss_fn, conf, rank, pbar=True):
             del pred, data
         numbers = {**metrics, **{"loss/" + k: v for k, v in losses.items()}}
         for k, v in numbers.items():
+            if isinstance(v, torch.Tensor):
+                v = v.reshape(-1)
             if k not in results:
                 results[k] = AverageMetric()
                 if k in conf.median_metrics:

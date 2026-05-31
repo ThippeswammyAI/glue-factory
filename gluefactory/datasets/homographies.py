@@ -22,6 +22,7 @@ from ..geometry.homography import (
     compute_homography,
     sample_homography_corners,
     warp_points,
+    warp_points_torch,
 )
 from ..models.cache_loader import CacheLoader, pad_local_features
 from ..settings import DATA_PATH
@@ -176,29 +177,60 @@ class _Dataset(torch.utils.data.Dataset):
     def _transform_keypoints(self, features, data):
         """Transform keypoints by a homography, threshold them,
         and potentially keep only the best ones."""
-        # Warp points
-        features["keypoints"] = warp_points(
-            features["keypoints"], data["H_"], inverse=False
-        )
+        # Warp points and compute a validity mask, then apply it to all
+        # per-keypoint arrays to keep them consistent.
+        # Warp keypoints using torch implementation when possible to keep
+        # tensors on the same device and avoid mixing numpy/torch types.
+        if isinstance(features.get("keypoints"), torch.Tensor):
+            kp = features["keypoints"]
+            H_t = torch.from_numpy(data["H_"]).to(kp)
+            warped_all = warp_points_torch(kp[None, ...], H_t[None, ...], inverse=False)
+            warped_kp = warped_all[0]
+        else:
+            warped_kp = warp_points(features["keypoints"], data["H_"], inverse=False)
         h, w = data["image"].shape[1:3]
         valid = (
-            (features["keypoints"][:, 0] >= 0)
-            & (features["keypoints"][:, 0] <= w - 1)
-            & (features["keypoints"][:, 1] >= 0)
-            & (features["keypoints"][:, 1] <= h - 1)
+            (warped_kp[:, 0] >= 0)
+            & (warped_kp[:, 0] <= w - 1)
+            & (warped_kp[:, 1] >= 0)
+            & (warped_kp[:, 1] <= h - 1)
         )
-        features["keypoints"] = features["keypoints"][valid]
+        orig_n = features["keypoints"].shape[0]
+        for k, v in list(features.items()):
+            if isinstance(v, np.ndarray) and v.shape[0] == orig_n:
+                features[k] = v[valid]
+        features["keypoints"] = warped_kp[valid]
 
         # Threshold
         if self.conf.load_features.thresh > 0:
-            valid = features["keypoint_scores"] >= self.conf.load_features.thresh
-            features = {k: v[valid] for k, v in features.items()}
+            mask = features["keypoint_scores"] >= self.conf.load_features.thresh
+            for k, v in list(features.items()):
+                try:
+                    if hasattr(v, "shape") and v.shape[0] == features["keypoints"].shape[0]:
+                        features[k] = v[mask]
+                except Exception:
+                    # fallback: skip non-indexable entries
+                    pass
 
         # Get the top keypoints and pad
         n = self.conf.load_features.max_num_keypoints
         if n > -1:
-            inds = np.argsort(-features["keypoint_scores"])
-            features = {k: v[inds[:n]] for k, v in features.items()}
+            scores = features["keypoint_scores"]
+            # compute sorted indices (handle torch tensors and numpy arrays)
+            if hasattr(scores, "numpy"):
+                inds = np.argsort(-scores.cpu().numpy())
+            else:
+                inds = np.argsort(-scores)
+
+            for k, v in list(features.items()):
+                try:
+                    if hasattr(v, "shape") and v.shape[0] == (
+                        scores.shape[0] if hasattr(scores, "shape") else len(scores)
+                    ):
+                        features[k] = v[inds[:n]]
+                except Exception:
+                    # skip non-indexable entries
+                    pass
 
             if self.conf.load_features.force_num_keypoints:
                 features = pad_local_features(
@@ -214,7 +246,7 @@ class _Dataset(torch.utils.data.Dataset):
         else:
             return self.getitem(idx)
 
-    def _read_view(self, img, H_conf, ps, left=False):
+    def _read_view(self, name, img, H_conf, ps, left=False):
         data = sample_homography(img, H_conf, ps)
         if left:
             data["image"] = self.left_augment(data["image"], return_tensor=True)
@@ -224,7 +256,9 @@ class _Dataset(torch.utils.data.Dataset):
         gs = data["image"].new_tensor([0.299, 0.587, 0.114]).view(3, 1, 1)
         if self.conf.grayscale:
             data["image"] = (data["image"] * gs).sum(0, keepdim=True)
-
+        
+        data["name"] = Path(name).name
+        data["scales"] = np.array([1.0, 1.0], dtype=np.float32)
         if self.conf.load_features.do:
             features = self.feature_loader({k: [v] for k, v in data.items()})
             features = self._transform_keypoints(features, data)
@@ -246,8 +280,8 @@ class _Dataset(torch.utils.data.Dataset):
         if self.conf.right_only:
             left_conf["difficulty"] = 0.0
 
-        data0 = self._read_view(img, left_conf, ps, left=True)
-        data1 = self._read_view(img, self.conf.homography, ps, left=False)
+        data0 = self._read_view(name, img, left_conf, ps, left=True)
+        data1 = self._read_view(name, img, self.conf.homography, ps, left=False)
 
         H = compute_homography(data0["coords"], data1["coords"], [1, 1])
 

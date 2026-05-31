@@ -600,7 +600,7 @@ def main():
             grp.create_dataset("keypoint_scores", data=scores)
             
             # Save premium individual visualizations
-            save_visualizations(name, kpts, scores, loaded_imgs, warped_samples, visualizations_dir)
+            # save_visualizations(name, kpts, scores, loaded_imgs, warped_samples, visualizations_dir)
             
             logger.info(f"Scene {name}: Extracted {len(kpts)} keypoints and saved visual plots.")
             

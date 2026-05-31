@@ -55,3 +55,30 @@ def make_match_figures(pred_, data_, n_pairs=2):
     ]
 
     return {"matching": fig}
+
+def make_keypoint_figures(pred_, data_, n_pairs=2):
+    """Safely visualizes and saves keypoints without requiring matches."""
+    images, kpts = [], []
+    pred = batch_to_device(pred_, "cpu", non_blocking=False)
+    data = batch_to_device(data_, "cpu", non_blocking=False)
+
+    view0, view1 = data["view0"], data["view1"]
+    n_pairs = min(n_pairs, view0["image"].shape[0])
+
+    # Extract keypoints from both views
+    kp0, kp1 = pred["keypoints0"], pred["keypoints1"]
+
+    for i in range(n_pairs):
+        images.append(
+            [view0["image"][i].permute(1, 2, 0), view1["image"][i].permute(1, 2, 0)]
+        )
+        kpts.append([kp0[i], kp1[i]])
+
+    # Draw the images and overlay the keypoints in green
+    fig, axes = plot_image_grid(images, return_fig=True, set_lim=True)
+    [plot_keypoints(kpts[i], axes=axes[i], colors="lime") for i in range(n_pairs)]
+
+    # Save the visualization directly to your glue-factory folder!
+    fig.savefig("latest_keypoints_visualization.png", bbox_inches="tight")
+
+    return {"keypoints": fig}
