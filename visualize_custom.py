@@ -30,7 +30,7 @@ def main():
         return
 
     # Find all images
-    image_paths = sorted(list(images_dir.glob("*.png")) + list(images_dir.glob("*.jpg")))
+    image_paths = sorted(list(images_dir.glob("*.png")) + list(images_dir.glob("*.jpg")) + list(images_dir.glob("*.jpeg")))
     if not image_paths:
         logger.error(f"No images found in {images_dir}")
         return

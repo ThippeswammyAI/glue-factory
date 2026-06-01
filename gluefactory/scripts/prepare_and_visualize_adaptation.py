@@ -842,9 +842,11 @@ def main():
     parser.add_argument("--use_gpu", action="store_true", default=True, help="Use GPU-accelerated splatting & warping.")
     parser.add_argument("--no_gpu", dest="use_gpu", action="store_false", help="Disable GPU-accelerated splatting & warping.")
     parser.add_argument("--num_threads", type=int, default=4, help="Number of parallel thread workers for image dataset processing.")
+    parser.add_argument("--dataset", type=str, default="custom_dataset1", help="Name of the dataset directory under data/")
+    parser.add_argument("--image_list_modality", type=str, default="reflectivity", choices=MODALITIES, help="Modality directory prefix for custom_image_list.txt")
     args = parser.parse_args()
     
-    dataset_dir = DATA_PATH / "custom_dataset1"
+    dataset_dir = DATA_PATH / args.dataset
     images_dir = dataset_dir / "images"
     exports_dir = dataset_dir / "exports"
     exports_dir.mkdir(exist_ok=True, parents=True)
@@ -943,6 +945,13 @@ def main():
         import shutil
         shutil.copy(default_consensus, default_overview)
         
+    # Write custom_image_list.txt listing relative paths under the chosen modality (default: reflectivity)
+    image_list_path = dataset_dir / "custom_image_list.txt"
+    logger.info(f"Saving custom image list to {image_list_path} using modality prefix '{args.image_list_modality}'...")
+    with open(image_list_path, "w") as img_list_f:
+        for name in sorted(image_names):
+            img_list_f.write(f"{args.image_list_modality}/{name}\n")
+            
     logger.info(f"All processing complete! Individual visualization files saved in {visualizations_dir}")
 
 if __name__ == "__main__":

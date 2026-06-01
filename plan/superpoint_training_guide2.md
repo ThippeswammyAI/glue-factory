@@ -94,8 +94,12 @@ find images -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) > 
 
 python3 prepare_and_visualize_adaptation.py 
 
-# Launch with full GPU acceleration and 8 parallel preprocessing threads
+# Launch with full GPU acceleration, 8 parallel threads, and automatic custom_image_list.txt generation for custom_dataset
 python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
     --warp_mode 3d \
     --use_gpu \
-    --num_threads 8
+    --num_threads 8 \
+    --num_warps 2 \
+    --dataset custom_dataset \
+    --image_list_modality reflectivity
+
