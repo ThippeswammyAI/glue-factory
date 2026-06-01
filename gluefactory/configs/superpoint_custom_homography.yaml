@@ -3,19 +3,19 @@ data:
     data_dir: custom_dataset1
     image_dir: images
     image_list: custom_image_list.txt
-    train_size: 15
+    train_size: 16
     val_size: 4
-    batch_size: 1
-    num_workers: 2
+    batch_size: 2
+    num_workers: 8
     homography:
         difficulty: 0.7
         max_angle: 45
-        patch_shape: [512, 512]
+        patch_shape: [512, 208]
     photometric:
         name: lg
     load_features:
         do: True
-        path: "custom_dataset/exports/pseudo_labels.h5"
+        path: "custom_dataset1/exports/pseudo_labels.h5"
         collate: False
         max_num_keypoints: 512
         force_num_keypoints: True
@@ -26,7 +26,7 @@ model:
         max_num_keypoints: 512
         force_num_keypoints: True
         detection_threshold: -1
-        nms_radius: 3
+        nms_radius: 4
         trainable: True
         lambda_d: 1.0
         dense_outputs: True
