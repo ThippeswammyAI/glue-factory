@@ -36,7 +36,7 @@ model:
         name: null
 train:
     seed: 0
-    epochs: 2
+    epochs: 100
     log_every_iter: 1
     eval_every_iter: 10
     lr: 1e-4
