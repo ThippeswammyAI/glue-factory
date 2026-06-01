@@ -16,6 +16,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MODALITIES = ["nearir", "range", "reflectivity", "signal"]
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+model_lock = threading.Lock()
 
 def sample_random_homography(shape, difficulty=0.7):
     """
@@ -55,9 +59,9 @@ def sample_random_3d_transform(difficulty=0.7):
     max_ty = 0.05 * difficulty
     max_tz = 0.5 * difficulty
     
-    max_pitch = np.deg2rad(5.0 * difficulty)
+    max_pitch = np.deg2rad(7.0 * difficulty)
     max_yaw = np.deg2rad(10.0 * difficulty)
-    max_roll = np.deg2rad(3.0 * difficulty)
+    max_roll = np.deg2rad(6.0 * difficulty)
     
     tx = np.random.uniform(-max_tx, max_tx)
     ty = np.random.uniform(-max_ty, max_ty)
@@ -88,6 +92,97 @@ def sample_random_3d_transform(difficulty=0.7):
     
     R = Rz @ Ry @ Rx
     return R, t
+
+def warp_perspective_torch(img_t, H_t, device):
+    """
+    GPU-accelerated PyTorch 2D homography warping using grid_sample.
+    """
+    H, W = img_t.shape[-2:]
+    grid = torch.meshgrid(torch.arange(W, device=device), torch.arange(H, device=device), indexing='xy')
+    coords = torch.stack([grid[0].float(), grid[1].float(), torch.ones_like(grid[0], dtype=torch.float32)], dim=-1)
+    coords_proj = coords @ H_t.T
+    coords_proj = coords_proj[:, :, :2] / torch.clamp(coords_proj[:, :, 2:], min=1e-6)
+    
+    grid_sample_coords = torch.stack([
+        2.0 * coords_proj[:, :, 0] / (W - 1) - 1.0,
+        2.0 * coords_proj[:, :, 1] / (H - 1) - 1.0
+    ], dim=-1).unsqueeze(0)
+    
+    img_feed = img_t.float().unsqueeze(0).unsqueeze(0)
+    warped_t = torch.nn.functional.grid_sample(img_feed, grid_sample_coords, mode='bilinear', padding_mode='zeros', align_corners=True)
+    return warped_t.squeeze(0).squeeze(0).to(img_t.dtype)
+
+def warp_3d_projective_torch(loaded_imgs, depth_map_t, R_t, t_t, K_t, device):
+    """
+    Fully GPU-accelerated PyTorch implementation of 3D projective warping.
+    """
+    H, W = depth_map_t.shape
+    u, v = torch.meshgrid(torch.arange(W, device=device), torch.arange(H, device=device), indexing='xy')
+    
+    valid_depth_mask = (depth_map_t > 0)
+    if not torch.any(valid_depth_mask):
+        warped_imgs = {mod: torch.zeros((H, W), dtype=img.dtype, device=device) for mod, img in loaded_imgs.items()}
+        return warped_imgs, torch.zeros((H, W), dtype=torch.bool, device=device), torch.zeros((H, W, 2), dtype=torch.float32, device=device)
+        
+    u_valid = u[valid_depth_mask]
+    v_valid = v[valid_depth_mask]
+    d_valid = depth_map_t[valid_depth_mask]
+    
+    K_inv = torch.linalg.inv(K_t)
+    pixels_homo = torch.stack([u_valid.float(), v_valid.float(), torch.ones_like(u_valid, dtype=torch.float32)], dim=0)
+    P_3D = d_valid.float() * (K_inv @ pixels_homo)
+    
+    P_prime_3D = R_t @ P_3D + t_t[:, None]
+    z_prime = P_prime_3D[2, :]
+    
+    valid_z_mask = (z_prime > 1e-3)
+    if not torch.any(valid_z_mask):
+        warped_imgs = {mod: torch.zeros((H, W), dtype=img.dtype, device=device) for mod, img in loaded_imgs.items()}
+        return warped_imgs, torch.zeros((H, W), dtype=torch.bool, device=device), torch.zeros((H, W, 2), dtype=torch.float32, device=device)
+        
+    projected = K_t @ P_prime_3D[:, valid_z_mask]
+    u_prime = projected[0, :] / torch.clamp(z_prime[valid_z_mask], min=1e-6)
+    v_prime = projected[1, :] / torch.clamp(z_prime[valid_z_mask], min=1e-6)
+    z_prime = z_prime[valid_z_mask]
+    
+    u_orig = u_valid[valid_z_mask]
+    v_orig = v_valid[valid_z_mask]
+    
+    u_idx = torch.round(u_prime).long()
+    v_idx = torch.round(v_prime).long()
+    in_bounds = (u_idx >= 0) & (u_idx < W) & (v_idx >= 0) & (v_idx < H)
+    
+    if not torch.any(in_bounds):
+        warped_imgs = {mod: torch.zeros((H, W), dtype=img.dtype, device=device) for mod, img in loaded_imgs.items()}
+        return warped_imgs, torch.zeros((H, W), dtype=torch.bool, device=device), torch.zeros((H, W, 2), dtype=torch.float32, device=device)
+        
+    u_idx = u_idx[in_bounds]
+    v_idx = v_idx[in_bounds]
+    z_prime = z_prime[in_bounds]
+    u_orig = u_orig[in_bounds]
+    v_orig = v_orig[in_bounds]
+    
+    sort_idx = torch.argsort(-z_prime)
+    u_idx_sorted = u_idx[sort_idx]
+    v_idx_sorted = v_idx[sort_idx]
+    u_orig_sorted = u_orig[sort_idx]
+    v_orig_sorted = v_orig[sort_idx]
+    
+    warped_imgs = {}
+    for mod, img in loaded_imgs.items():
+        warped_img = torch.zeros((H, W), dtype=img.dtype, device=device)
+        colors = img[v_orig_sorted, u_orig_sorted]
+        warped_img[v_idx_sorted, u_idx_sorted] = colors
+        warped_imgs[mod] = warped_img
+        
+    valid_mask = torch.zeros((H, W), dtype=torch.bool, device=device)
+    valid_mask[v_idx_sorted, u_idx_sorted] = True
+    
+    warped_coord_map = torch.zeros((H, W, 2), dtype=torch.float32, device=device)
+    warped_coord_map[v_idx_sorted, u_idx_sorted, 0] = u_orig_sorted.float()
+    warped_coord_map[v_idx_sorted, u_idx_sorted, 1] = v_orig_sorted.float()
+    
+    return warped_imgs, valid_mask, warped_coord_map
 
 def warp_3d_projective(loaded_imgs, depth_map, R, t, K):
     """
@@ -172,7 +267,7 @@ def warp_3d_projective(loaded_imgs, depth_map, R, t, K):
     
     return warped_imgs, valid_mask, warped_coord_map
 
-def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=15, detection_threshold=0.015, nms_radius=4, warp_mode="3d", K=None, return_all_warps=False):
+def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=15, detection_threshold=0.015, nms_radius=4, warp_mode="3d", K=None, return_all_warps=False, use_gpu=True):
     """
     Perform Joint Multimodal Homographic Adaptation.
     Reads synchronized images from 'nearir', 'range', 'reflectivity', and 'signal'.
@@ -221,8 +316,14 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
             raise ValueError("Intrinsics matrix K is required for 3D warp mode.")
             
     # Joint accumulator heatmap and trials map
-    joint_accumulator = np.zeros((h, w), dtype=np.float32)
-    global_trials = np.zeros((h, w), dtype=np.float32)
+    if use_gpu:
+        loaded_imgs_t = {mod: torch.from_numpy(img.astype(np.float32)).to(device) for mod, img in loaded_imgs.items()}
+        loaded_imgs_feed_t = {mod: torch.from_numpy(img.astype(np.float32)).to(device) for mod, img in loaded_imgs_feed.items()}
+        joint_accumulator_t = torch.zeros((h, w), dtype=torch.float32, device=device)
+        global_trials_t = torch.zeros((h, w), dtype=torch.float32, device=device)
+    else:
+        joint_accumulator = np.zeros((h, w), dtype=np.float32)
+        global_trials = np.zeros((h, w), dtype=np.float32)
     
     # For saving intermediate warped samples
     warped_samples = []
@@ -231,61 +332,110 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
     # Process each modality
     for mod_name, img in loaded_imgs.items():
         # 1. Base detection on original image
-        img_feed = loaded_imgs_feed[mod_name]
-        img_tensor = torch.from_numpy(img_feed).float().unsqueeze(0).unsqueeze(0).to(device) / 255.0
-        with torch.no_grad():
-            pred = model({"image": img_tensor})
-            kpts = pred["keypoints"][0].cpu().numpy() - 0.5
-            scores = pred["keypoint_scores"][0].cpu().numpy()
+        if use_gpu:
+            img_feed_t = loaded_imgs_feed_t[mod_name]
+            img_tensor = img_feed_t.unsqueeze(0).unsqueeze(0) / 255.0
+            with model_lock:
+                with torch.no_grad():
+                    pred = model({"image": img_tensor})
+                    kpts_t = pred["keypoints"][0] - 0.5
+                    scores_t = pred["keypoint_scores"][0]
             
-        for (x, y), score in zip(kpts, scores):
-            ix, iy = int(round(x)), int(round(y))
-            if 0 <= ix < w and 0 <= iy < h:
-                joint_accumulator[iy, ix] += score
-        
-        global_trials += 1.0 # Original is always a valid trial for this modality
+            ix = torch.round(kpts_t[:, 0]).long()
+            iy = torch.round(kpts_t[:, 1]).long()
+            in_bounds = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+            joint_accumulator_t.index_put_((iy[in_bounds], ix[in_bounds]), scores_t[in_bounds], accumulate=True)
+            global_trials_t += 1.0
+        else:
+            img_feed = loaded_imgs_feed[mod_name]
+            img_tensor = torch.from_numpy(img_feed).float().unsqueeze(0).unsqueeze(0).to(device) / 255.0
+            with model_lock:
+                with torch.no_grad():
+                    pred = model({"image": img_tensor})
+                    kpts = pred["keypoints"][0].cpu().numpy() - 0.5
+                    scores = pred["keypoint_scores"][0].cpu().numpy()
+                
+            for (x, y), score in zip(kpts, scores):
+                ix, iy = int(round(x)), int(round(y))
+                if 0 <= ix < w and 0 <= iy < h:
+                    joint_accumulator[iy, ix] += score
+            global_trials += 1.0
         
         # 2. Homographic/Projective adaptations for this modality
         for warp_idx in range(num_warps):
             if warp_mode == "3d":
                 R, t = sample_random_3d_transform(difficulty=0.7)
-                depth_m = loaded_imgs["range"].astype(np.float32) / 1000.0
-                warped_dict, valid_mask, warped_coord_map = warp_3d_projective(
-                    {mod_name: img}, depth_m, R, t, K
-                )
-                warped_img = warped_dict[mod_name]
                 
-                # Create feed-able warped image
-                if mod_name == "range":
-                    if warped_img.max() > 0:
-                        warped_feed = ((warped_img.astype(np.float32) / warped_img.max()) * 255.0).astype(np.uint8)
+                if use_gpu:
+                    R_t = torch.from_numpy(R).float().to(device)
+                    t_t = torch.from_numpy(t).float().to(device)
+                    K_t = torch.from_numpy(K).float().to(device)
+                    depth_m_t = loaded_imgs_t["range"] / 1000.0
+                    
+                    warped_dict_t, valid_mask_t, warped_coord_map_t = warp_3d_projective_torch(
+                        {mod_name: loaded_imgs_t[mod_name]}, depth_m_t, R_t, t_t, K_t, device
+                    )
+                    warped_img_t = warped_dict_t[mod_name]
+                    
+                    if mod_name == "range":
+                        mx = warped_img_t.max()
+                        if mx > 0:
+                            warped_feed_t = (warped_img_t / mx) * 255.0
+                        else:
+                            warped_feed_t = torch.zeros_like(warped_img_t)
                     else:
-                        warped_feed = np.zeros_like(warped_img, dtype=np.uint8)
+                        warped_feed_t = warped_img_t
+                        
+                    warped_tensor = warped_feed_t.unsqueeze(0).unsqueeze(0) / 255.0
+                    warped_img = warped_img_t.cpu().numpy().astype(np.uint8)
+                    valid_mask = valid_mask_t.cpu().numpy()
                 else:
-                    warped_feed = warped_img
+                    depth_m = loaded_imgs["range"].astype(np.float32) / 1000.0
+                    warped_dict, valid_mask, warped_coord_map = warp_3d_projective(
+                        {mod_name: img}, depth_m, R, t, K
+                    )
+                    warped_img = warped_dict[mod_name]
+                    if mod_name == "range":
+                        if warped_img.max() > 0:
+                            warped_feed = ((warped_img.astype(np.float32) / warped_img.max()) * 255.0).astype(np.uint8)
+                        else:
+                            warped_feed = np.zeros_like(warped_img, dtype=np.uint8)
+                    else:
+                        warped_feed = warped_img
+                    warped_tensor = torch.from_numpy(warped_feed).float().unsqueeze(0).unsqueeze(0).to(device) / 255.0
             else:
                 H = sample_random_homography((h, w), difficulty=0.7)
                 H_inv = np.linalg.inv(H)
-                warped_img = cv2.warpPerspective(img, H, (w, h), flags=cv2.INTER_LINEAR)
-                warped_feed = warped_img
                 
-            warped_tensor = torch.from_numpy(warped_feed).float().unsqueeze(0).unsqueeze(0).to(device) / 255.0
-            
-            with torch.no_grad():
-                pred_warped = model({"image": warped_tensor})
-                kpts_warped = pred_warped["keypoints"][0].cpu().numpy() - 0.5
-                scores_warped = pred_warped["keypoint_scores"][0].cpu().numpy()
+                if use_gpu:
+                    H_t = torch.from_numpy(H).float().to(device)
+                    H_inv_t = torch.from_numpy(H_inv).float().to(device)
+                    
+                    warped_img_t = warp_perspective_torch(loaded_imgs_t[mod_name], H_t, device)
+                    warped_tensor = warped_img_t.unsqueeze(0).unsqueeze(0) / 255.0
+                    warped_img = warped_img_t.cpu().numpy().astype(np.uint8)
+                else:
+                    warped_img = cv2.warpPerspective(img, H, (w, h), flags=cv2.INTER_LINEAR)
+                    warped_tensor = torch.from_numpy(warped_img).float().unsqueeze(0).unsqueeze(0).to(device) / 255.0
+                
+            with model_lock:
+                with torch.no_grad():
+                    pred_warped = model({"image": warped_tensor})
+                    kpts_warped_t = pred_warped["keypoints"][0] - 0.5
+                    scores_warped_t = pred_warped["keypoint_scores"][0]
                 
             # If this is nearir and we want to keep a few visual samples
-            if mod_name == "nearir" and len(warped_samples) < 3 and len(kpts_warped) > 0:
+            if mod_name == "nearir" and len(warped_samples) < 3 and len(kpts_warped_t) > 0:
                 warped_samples.append({
                     "image": warped_img,
-                    "keypoints": kpts_warped,
-                    "scores": scores_warped
+                    "keypoints": kpts_warped_t.cpu().numpy(),
+                    "scores": scores_warped_t.cpu().numpy()
                 })
                 
-            # If we want to capture all detailed warps for visualization
+            # If we want to capture all detailed warps for visualization (CPU only)
             if return_all_warps:
+                kpts_warped = kpts_warped_t.cpu().numpy()
+                scores_warped = scores_warped_t.cpu().numpy()
                 if len(kpts_warped) > 0:
                     if warp_mode == "3d":
                         kpts_back_list = []
@@ -323,36 +473,79 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
                 })
 
             # Inverse warp detected keypoints and splat
-            if len(kpts_warped) > 0:
-                if warp_mode == "3d":
-                    for (x_prime, y_prime), score in zip(kpts_warped, scores_warped):
-                        ix_prime = int(round(x_prime))
-                        iy_prime = int(round(y_prime))
-                        if 0 <= ix_prime < w and 0 <= iy_prime < h:
-                            if valid_mask[iy_prime, ix_prime]:
-                                x_orig = warped_coord_map[iy_prime, ix_prime, 0]
-                                y_orig = warped_coord_map[iy_prime, ix_prime, 1]
-                                ix_orig, iy_orig = int(round(x_orig)), int(round(y_orig))
-                                if 0 <= ix_orig < w and 0 <= iy_orig < h:
-                                    joint_accumulator[iy_orig, ix_orig] += score
-                else:
-                    ones = np.ones((len(kpts_warped), 1), dtype=np.float32)
-                    kpts_homo = np.concatenate([kpts_warped, ones], axis=1)
-                    kpts_back = (H_inv @ kpts_homo.T).T
-                    kpts_back = kpts_back[:, :2] / kpts_back[:, 2:]
-                    
-                    for (x, y), score in zip(kpts_back, scores_warped):
-                        ix, iy = int(round(x)), int(round(y))
-                        if 0 <= ix < w and 0 <= iy < h:
-                            joint_accumulator[iy, ix] += score
+            if len(kpts_warped_t) > 0:
+                if use_gpu:
+                    if warp_mode == "3d":
+                        ix_prime = torch.round(kpts_warped_t[:, 0]).long()
+                        iy_prime = torch.round(kpts_warped_t[:, 1]).long()
+                        
+                        in_bounds = (ix_prime >= 0) & (ix_prime < w) & (iy_prime >= 0) & (iy_prime < h)
+                        ix_prime = ix_prime[in_bounds]
+                        iy_prime = iy_prime[in_bounds]
+                        scores_valid = scores_warped_t[in_bounds]
+                        
+                        if len(scores_valid) > 0:
+                            mask_valid_proj = valid_mask_t[iy_prime, ix_prime]
+                            coords = warped_coord_map_t[iy_prime, ix_prime]
                             
-            # Track valid region trials for this warp
-            if warp_mode == "3d":
-                global_trials += valid_mask.astype(np.float32)
-            else:
-                ones_mask = np.ones((h, w), dtype=np.float32)
-                valid_back = cv2.warpPerspective(ones_mask, H_inv, (w, h), flags=cv2.INTER_NEAREST)
-                global_trials += valid_back
+                            coords = coords[mask_valid_proj]
+                            scores_proj = scores_valid[mask_valid_proj]
+                            
+                            ix_orig = torch.round(coords[:, 0]).long()
+                            iy_orig = torch.round(coords[:, 1]).long()
+                            
+                            in_bounds_orig = (ix_orig >= 0) & (ix_orig < w) & (iy_orig >= 0) & (iy_orig < h)
+                            joint_accumulator_t.index_put_((iy_orig[in_bounds_orig], ix_orig[in_bounds_orig]), scores_proj[in_bounds_orig], accumulate=True)
+                        
+                        global_trials_t += valid_mask_t.float()
+                    else:
+                        ones = torch.ones((len(kpts_warped_t), 1), device=device)
+                        kpts_homo = torch.cat([kpts_warped_t, ones], dim=1)
+                        kpts_back = (H_inv_t @ kpts_homo.T).T
+                        kpts_back = kpts_back[:, :2] / torch.clamp(kpts_back[:, 2:], min=1e-6)
+                        
+                        ix = torch.round(kpts_back[:, 0]).long()
+                        iy = torch.round(kpts_back[:, 1]).long()
+                        in_bounds = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+                        
+                        joint_accumulator_t.index_put_((iy[in_bounds], ix[in_bounds]), scores_warped_t[in_bounds], accumulate=True)
+                        
+                        ones_mask = torch.ones((h, w), device=device)
+                        valid_back_t = warp_perspective_torch(ones_mask, H_inv_t, device)
+                        global_trials_t += valid_back_t
+                else:
+                    kpts_warped = kpts_warped_t.cpu().numpy()
+                    scores_warped = scores_warped_t.cpu().numpy()
+                    if warp_mode == "3d":
+                        for (x_prime, y_prime), score in zip(kpts_warped, scores_warped):
+                            ix_prime = int(round(x_prime))
+                            iy_prime = int(round(y_prime))
+                            if 0 <= ix_prime < w and 0 <= iy_prime < h:
+                                if valid_mask[iy_prime, ix_prime]:
+                                    x_orig = warped_coord_map[iy_prime, ix_prime, 0]
+                                    y_orig = warped_coord_map[iy_prime, ix_prime, 1]
+                                    ix_orig, iy_orig = int(round(x_orig)), int(round(y_orig))
+                                    if 0 <= ix_orig < w and 0 <= iy_orig < h:
+                                        joint_accumulator[iy_orig, ix_orig] += score
+                        global_trials += valid_mask.astype(np.float32)
+                    else:
+                        ones = np.ones((len(kpts_warped), 1), dtype=np.float32)
+                        kpts_homo = np.concatenate([kpts_warped, ones], axis=1)
+                        kpts_back = (H_inv @ kpts_homo.T).T
+                        kpts_back = kpts_back[:, :2] / kpts_back[:, 2:]
+                        
+                        for (x, y), score in zip(kpts_back, scores_warped):
+                            ix, iy = int(round(x)), int(round(y))
+                            if 0 <= ix < w and 0 <= iy < h:
+                                joint_accumulator[iy, ix] += score
+                        
+                        ones_mask = np.ones((h, w), dtype=np.float32)
+                        valid_back = cv2.warpPerspective(ones_mask, H_inv, (w, h), flags=cv2.INTER_NEAREST)
+                        global_trials += valid_back
+            
+    if use_gpu:
+        joint_accumulator = joint_accumulator_t.cpu().numpy()
+        global_trials = global_trials_t.cpu().numpy()
             
     # Normalize by the total number of validation trials across all modalities and warps
     normalized_heatmap = joint_accumulator / np.maximum(global_trials, 1.0)
@@ -511,16 +704,19 @@ def save_detailed_warp_visualizations(scene_name, all_warps_info, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Multimodal Homographic Adaptation & Visualizer")
-    parser.add_argument("--num_warps", type=int, default=15, help="Number of homography warps per modality")
-    parser.add_argument("--thresh", type=float, default=0.015, help="Keypoint threshold")
-    parser.add_argument("--nms", type=int, default=4, help="NMS radius")
+    parser.add_argument("--num_warps", type=int, default=200, help="Number of homography warps per modality")
+    parser.add_argument("--thresh", type=float, default=0.02, help="Keypoint threshold")
+    parser.add_argument("--nms", type=int, default=5, help="NMS radius")
     parser.add_argument("--warp_mode", type=str, default="3d", choices=["2d", "3d"], help="Warp mode: 2d homography or 3d projective")
     parser.add_argument("--camera_info", type=str, default="plan/camera.info", help="Path to camera info file for 3d intrinsics")
     parser.add_argument("--save_detailed_warps", action="store_true", help="Save detailed side-by-side warp visualizations for a chosen scene")
     parser.add_argument("--viz_timestamp", type=str, default="", help="Specific image filename to visualize detailed warps (defaults to first image if empty)")
+    parser.add_argument("--use_gpu", action="store_true", default=True, help="Use GPU-accelerated splatting & warping.")
+    parser.add_argument("--no_gpu", dest="use_gpu", action="store_false", help="Disable GPU-accelerated splatting & warping.")
+    parser.add_argument("--num_threads", type=int, default=4, help="Number of parallel thread workers for image dataset processing.")
     args = parser.parse_args()
     
-    dataset_dir = DATA_PATH / "custom_dataset"
+    dataset_dir = DATA_PATH / "custom_dataset1"
     images_dir = dataset_dir / "images"
     exports_dir = dataset_dir / "exports"
     exports_dir.mkdir(exist_ok=True, parents=True)
@@ -579,30 +775,43 @@ def main():
     
     viz_name = args.viz_timestamp if args.viz_timestamp else (image_names[0] if image_names else "")
     
+    lock = threading.Lock()
+    
     with h5py.File(output_h5, "w") as f:
-        for name in tqdm(image_names, desc="Multimodal Adaptation"):
-            should_save_detailed = args.save_detailed_warps and (name == viz_name)
-            
-            if should_save_detailed:
-                kpts, scores, loaded_imgs, warped_samples, all_warps_info = multimodal_homographic_adaptation(
-                    name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
-                    warp_mode=args.warp_mode, K=K, return_all_warps=True
-                )
-                save_detailed_warp_visualizations(name, all_warps_info, visualizations_dir)
+        with tqdm(total=len(image_names), desc="Multimodal Adaptation") as pbar:
+            def worker(name):
+                should_save_detailed = args.save_detailed_warps and (name == viz_name)
+                
+                if should_save_detailed:
+                    kpts, scores, loaded_imgs, warped_samples, all_warps_info = multimodal_homographic_adaptation(
+                        name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
+                        warp_mode=args.warp_mode, K=K, return_all_warps=True, use_gpu=args.use_gpu
+                    )
+                    save_detailed_warp_visualizations(name, all_warps_info, visualizations_dir)
+                else:
+                    kpts, scores, loaded_imgs, warped_samples = multimodal_homographic_adaptation(
+                        name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
+                        warp_mode=args.warp_mode, K=K, return_all_warps=False, use_gpu=args.use_gpu
+                    )
+                
+                with lock:
+                    grp = f.create_group(name)
+                    grp.create_dataset("keypoints", data=kpts)
+                    grp.create_dataset("keypoint_scores", data=scores)
+                    
+                    # Save premium individual visualizations for the first 3 scenes to save time & disk space
+                    if len(f.keys()) <= 3:
+                        save_visualizations(name, kpts, scores, loaded_imgs, warped_samples, visualizations_dir)
+                    
+                    logger.info(f"Scene {name}: Extracted {len(kpts)} keypoints.")
+                    pbar.update(1)
+
+            if args.num_threads > 1:
+                with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
+                    list(executor.map(worker, image_names))
             else:
-                kpts, scores, loaded_imgs, warped_samples = multimodal_homographic_adaptation(
-                    name, images_dir, model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
-                    warp_mode=args.warp_mode, K=K, return_all_warps=False
-                )
-            
-            grp = f.create_group(name)
-            grp.create_dataset("keypoints", data=kpts)
-            grp.create_dataset("keypoint_scores", data=scores)
-            
-            # Save premium individual visualizations
-            # save_visualizations(name, kpts, scores, loaded_imgs, warped_samples, visualizations_dir)
-            
-            logger.info(f"Scene {name}: Extracted {len(kpts)} keypoints and saved visual plots.")
+                for name in image_names:
+                    worker(name)
             
     # Copy the first scene visualization as the default overview
     sample_stem = Path(image_names[0]).stem

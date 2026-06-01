@@ -85,3 +85,17 @@ When you have a GPU environment ready, launch training on any modality with:
 ```bash
 /home/tippeswamy/python_venv/env/bin/python3 -m gluefactory.train superpoint_custom_run --conf gluefactory/configs/superpoint_custom_homography.yaml
 ```
+
+python3 -c "import h5py; f = h5py.File('data/custom_dataset/exports/pseudo_labels.h5', 'r'); print(list(f.keys())[:5])"
+
+find . -type f \( -iname "*.png" -o -iname "*.jpg" \) | sed 's|^\./||' > ../custom_image_list.txt
+
+find images -type f \( -iname "*.png" -o -iname "*.jpg" -o -iname "*.jpeg" \) > custom_image_list.txt
+
+python3 prepare_and_visualize_adaptation.py 
+
+# Launch with full GPU acceleration and 8 parallel preprocessing threads
+python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
+    --warp_mode 3d \
+    --use_gpu \
+    --num_threads 8

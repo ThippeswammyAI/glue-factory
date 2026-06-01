@@ -1,6 +1,6 @@
 data:
     name: homographies
-    data_dir: custom_dataset
+    data_dir: custom_dataset1
     image_dir: images
     image_list: custom_image_list.txt
     train_size: 15
