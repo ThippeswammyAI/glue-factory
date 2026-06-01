@@ -3,10 +3,10 @@ data:
     data_dir: custom_dataset1
     image_dir: images
     image_list: custom_image_list.txt
-    train_size: 16
-    val_size: 4
-    batch_size: 2
-    num_workers: 8
+    train_size: 64
+    val_size: 16
+    batch_size: 4
+    num_workers: 16
     homography:
         difficulty: 0.7
         max_angle: 45
@@ -36,7 +36,7 @@ model:
         name: null
 train:
     seed: 0
-    epochs: 100
+    epochs: 1000
     log_every_iter: 1
     eval_every_iter: 10
     lr: 1e-4
