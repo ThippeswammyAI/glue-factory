@@ -17,8 +17,8 @@ logger = logging.getLogger("visualize_custom")
 def main():
     # Define directories
     checkpoint_path = Path("outputs/training/superpoint_custom_run/checkpoint_best.tar")
-    images_dir = Path("data/custom_dataset1/images/reflectivity")
-    output_dir = Path("data/custom_dataset1/visualizations_trained")
+    images_dir = Path("data/inputs/cases3_indoor_rgb")
+    output_dir = Path("data/inputs/outputs/cases3_indoor_rgb/visualizations_trained")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     if not checkpoint_path.exists():
