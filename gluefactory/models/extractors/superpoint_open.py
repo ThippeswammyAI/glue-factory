@@ -117,6 +117,15 @@ class SuperPoint(BaseModel):
 
         if conf.weights is not None and Path(conf.weights).exists():
             state_dict = torch.load(conf.weights, map_location="cpu")
+            if "model" in state_dict:
+                state_dict = state_dict["model"]
+            # Strip "extractor." prefix if it exists in checkpoint keys
+            if any(k.startswith("extractor.") for k in state_dict.keys()):
+                state_dict = {
+                    k.replace("extractor.", "", 1): v
+                    for k, v in state_dict.items()
+                    if k.startswith("extractor.")
+                }
         else:
             state_dict = torch.hub.load_state_dict_from_url(self.checkpoint_url)
         self.load_state_dict(state_dict)
