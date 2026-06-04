@@ -28,6 +28,18 @@ configs = {
             "detection_threshold": 0.000,
         },
     },
+    "sp_custom": {
+        "name": f"custom_SP-k{n_kpts}-nms4",
+        "keys": ["keypoints", "descriptors", "keypoint_scores"],
+        "gray": True,
+        "conf": {
+            "name": "extractors.superpoint_open",
+            "weights": "outputs/training/superpoint_custom_run/checkpoint_best.tar",
+            "nms_radius": 4,
+            "max_num_keypoints": n_kpts,
+            "detection_threshold": 0.005,
+        },
+    },
     "sift": {
         "name": f"r{resize}_SIFT-k{n_kpts}",
         "keys": ["keypoints", "descriptors", "keypoint_scores", "oris", "scales"],
@@ -54,15 +66,17 @@ configs = {
 }
 
 
-def run_export(feature_file, images, args):
+def run_export(feature_file, images, args, root_folder="/"):
+    method_resize = None if args.method == "sp_custom" else resize
     conf = {
         "data": {
             "name": "image_folder",
             "grayscale": configs[args.method]["gray"],
             "preprocessing": {
-                "resize": resize,
+                "resize": method_resize,
             },
             "images": str(images),
+            "root_folder": str(root_folder),
             "batch_size": 1,
             "num_workers": args.num_workers,
         },
@@ -113,7 +127,12 @@ if __name__ == "__main__":
                 logging.info("Skip " + scene)
                 continue
             logging.info(f"Export local features for scene {scene}")
-            run_export(feature_file, data_root / scene / "images", args)
+            run_export(
+                feature_file,
+                data_root / scene / "images",
+                args,
+                root_folder=data_root / scene / "images",
+            )
     else:
         data_root = Path(DATA_PATH, args.dataset)
         feature_file = Path(
@@ -124,4 +143,11 @@ if __name__ == "__main__":
             f"Export local features for dataset {args.dataset} "
             f"to file {feature_file}"
         )
-        run_export(feature_file, data_root)
+        image_list_path = data_root / "custom_image_list.txt"
+        if image_list_path.exists():
+            images_input = image_list_path
+            root_folder = data_root / "images"
+        else:
+            images_input = data_root / "images"
+            root_folder = data_root / "images"
+        run_export(feature_file, images_input, args, root_folder=root_folder)
