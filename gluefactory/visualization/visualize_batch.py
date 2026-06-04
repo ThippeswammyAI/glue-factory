@@ -4,7 +4,7 @@ from ..utils.tensor import batch_to_device
 from .viz2d import cm_RdGn, plot_heatmaps, plot_image_grid, plot_keypoints, plot_matches
 
 
-def make_match_figures(pred_, data_, n_pairs=2):
+def make_match_figures(pred_, data_, n_pairs=4):
     # print first n pairs in batch
     if "0to1" in pred_.keys():
         pred_ = pred_["0to1"]
