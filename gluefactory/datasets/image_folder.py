@@ -17,6 +17,7 @@ class ImageFolder(BaseDataset, torch.utils.data.Dataset):
         "glob": ["*.jpg", "*.png", "*.jpeg", "*.JPG", "*.PNG"],
         "images": "???",
         "root_folder": "/",
+        "grayscale": False,
         "preprocessing": ImagePreprocessor.default_conf,
     }
 
@@ -51,7 +52,7 @@ class ImageFolder(BaseDataset, torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         path = self.images[idx]
-        img = load_image(path)
+        img = load_image(Path(self.root, path), grayscale=self.conf.grayscale)
         data = {"name": str(path), **self.preprocessor(img)}
         return data
 
