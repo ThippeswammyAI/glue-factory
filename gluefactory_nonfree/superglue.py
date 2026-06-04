@@ -349,7 +349,17 @@ class SuperGlue(BaseModel):
         losses["num_unmatchable"] = num_neg
         losses["bin_score"] = self.bin_score[None]
 
-        return losses
+        if not self.training:
+            try:
+                from gluefactory.models.utils.metrics import matcher_metrics
+
+                metrics = matcher_metrics(pred, data)
+            except Exception:
+                metrics = {}
+        else:
+            metrics = {}
+
+        return losses, metrics
 
     def metrics(self, pred, data):
         raise NotImplementedError
