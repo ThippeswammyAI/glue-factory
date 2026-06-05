@@ -3,12 +3,13 @@ model:
     extractor:
         name: gluefactory.models.lines.wireframe
         point_extractor:
-            name: gluefactory_nonfree.superpoint
+            name: extractors.superpoint_open
             trainable: False
             dense_outputs: True
             max_num_keypoints: 2048
             force_num_keypoints: False
-            detection_threshold: 0
+            detection_threshold: 0.005
+            nms_radius: 4
         line_extractor:
             name: gluefactory.models.lines.lsd
             trainable: False
@@ -30,7 +31,7 @@ model:
 benchmarks:
     hpatches:
         eval:
-            estimator: homography_est
+            estimator: opencv
             ransac_th: -1    # [1., 1.5, 2., 2.5, 3.]
     megadepth1500:
         data:
@@ -45,5 +46,5 @@ benchmarks:
             name: gluefactory.models.matchers.depth_matcher
             use_lines: True
         eval:
-            plot_methods: [ ]    # ['sp+NN', 'sp+sg', 'superpoint+lsd+gluestick']
-            plot_line_methods: [ ]    # ['superpoint+lsd+gluestick', 'sp+deeplsd+gs']
+            plot_methods: ['sp+NN', 'sp+sg', 'superpoint+lsd+gluestick']
+            plot_line_methods: ['superpoint+lsd+gluestick', 'sp+deeplsd+gs']

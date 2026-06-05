@@ -15,7 +15,7 @@ data:
         name: lg
     load_features:
         do: True
-        path: "exports/custom_dataset_boosted_SP.h5"
+        path: "exports/custom_dataset_consensus_SP.h5"
         collate: False
         max_num_keypoints: 512
         force_num_keypoints: True
