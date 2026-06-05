@@ -985,7 +985,7 @@ def get_html_template():
             <div class="control-group">
                 <label>Keypoint Threshold</label>
                 <div class="slider-container">
-                    <input type="range" id="kpt-thresh" min="0.0" max="0.2" step="0.005" value="0.00" oninput="updateKptThresh(this.value)">
+                    <input type="range" id="kpt-thresh" min="0.0" max="1" step="0.01" value="0.00" oninput="updateKptThresh(this.value)">
                     <span class="slider-val" id="kpt-thresh-val">0.00</span>
                 </div>
             </div>
@@ -1383,72 +1383,13 @@ def get_html_template():
             
             const focusPoint = hoveredPoint || selectedPoint;
             
-            // 1. Draw All Keypoints if enabled
-            if (settings.showKpts) {
-                kpts0.forEach((pt, i) => {
-                    if (scores0[i] < kptThresh) return;
-                    const cx = map.offset0.x + pt[0] * map.scale0.x;
-                    const cy = map.offset0.y + pt[1] * map.scale0.y;
-                    
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
-                    ctx.fillStyle = "rgba(6, 182, 212, 0.4)";
-                    ctx.fill();
-                });
+            // If a point or line is selected, make ALL OTHER keypoints and match lines invisible!
+            if (selectedPoint) {
+                const isView0 = selectedPoint.view === 0;
+                const idx = selectedPoint.index;
+                const match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
                 
-                kpts1.forEach((pt, i) => {
-                    if (scores1[i] < kptThresh) return;
-                    const cx = map.offset1.x + pt[0] * map.scale1.x;
-                    const cy = map.offset1.y + pt[1] * map.scale1.y;
-                    
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
-                    ctx.fillStyle = "rgba(217, 70, 239, 0.4)";
-                    ctx.fill();
-                });
-            }
-            
-            // 2. Draw Match Lines if enabled
-            if (settings.showMatches) {
-                if (showSelectedOnly) {
-                    if (focusPoint) {
-                        const isView0 = focusPoint.view === 0;
-                        const idx = focusPoint.index;
-                        const match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
-                        if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
-                            drawMatchLine(match, true);
-                        }
-                    }
-                } else {
-                    if (focusPoint) {
-                        // Draw other lines very faintly
-                        filteredMatches.forEach(m => {
-                            const isFocus = (focusPoint.view === 0 && m[0] === focusPoint.index) || 
-                                            (focusPoint.view === 1 && m[1] === focusPoint.index);
-                            if (!isFocus) {
-                                drawMatchLine(m, false, 0.04);
-                            }
-                        });
-                        // Highlight focus match line
-                        const isView0 = focusPoint.view === 0;
-                        const idx = focusPoint.index;
-                        const match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
-                        if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
-                            drawMatchLine(match, true);
-                        }
-                    } else {
-                        // Draw all normally
-                        filteredMatches.forEach(m => {
-                            drawMatchLine(m, false);
-                        });
-                    }
-                }
-            }
-            
-            // 3. Highlight focused point circles
-            if (focusPoint) {
-                const isView0 = focusPoint.view === 0;
-                const idx = focusPoint.index;
+                // Draw ONLY the selected keypoints and match line
                 const pt = isView0 ? kpts0[idx] : kpts1[idx];
                 const offset = isView0 ? map.offset0 : map.offset1;
                 const scale = isView0 ? map.scale0 : map.scale1;
@@ -1456,17 +1397,16 @@ def get_html_template():
                 const hy = offset.y + pt[1] * scale.y;
                 
                 ctx.beginPath();
-                ctx.arc(hx, hy, 8, 0, 2 * Math.PI);
+                ctx.arc(hx, hy, 9, 0, 2 * Math.PI);
                 ctx.strokeStyle = isView0 ? "var(--accent-cyan)" : "var(--accent-purple)";
-                ctx.lineWidth = 2;
+                ctx.lineWidth = 3;
                 ctx.stroke();
                 
                 ctx.beginPath();
-                ctx.arc(hx, hy, 3, 0, 2 * Math.PI);
+                ctx.arc(hx, hy, 4, 0, 2 * Math.PI);
                 ctx.fillStyle = isView0 ? "var(--accent-cyan)" : "var(--accent-purple)";
                 ctx.fill();
                 
-                let match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
                 if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
                     const partnerIdx = isView0 ? match[1] : match[0];
                     const partnerPt = isView0 ? kpts1[partnerIdx] : kpts0[partnerIdx];
@@ -1476,27 +1416,26 @@ def get_html_template():
                     const py = partnerOffset.y + partnerPt[1] * partnerScale.y;
                     
                     ctx.beginPath();
-                    ctx.arc(px, py, 7, 0, 2 * Math.PI);
+                    ctx.arc(px, py, 8, 0, 2 * Math.PI);
                     ctx.strokeStyle = isView0 ? "var(--accent-purple)" : "var(--accent-cyan)";
-                    ctx.lineWidth = 2;
+                    ctx.lineWidth = 3;
                     ctx.stroke();
                     
                     ctx.beginPath();
-                    ctx.arc(px, py, 3, 0, 2 * Math.PI);
+                    ctx.arc(px, py, 4, 0, 2 * Math.PI);
                     ctx.fillStyle = isView0 ? "var(--accent-purple)" : "var(--accent-cyan)";
                     ctx.fill();
-                }
-                
-                if (match) {
-                    const partnerIdx = isView0 ? match[1] : match[0];
-                    const partnerPt = isView0 ? kpts1[partnerIdx] : kpts0[partnerIdx];
+                    
+                    // Draw match line in bold, solid glowing style
+                    drawMatchLine(match, true);
+                    
                     showPopup(
                         isView0 ? pt : partnerPt,
                         isView0 ? scores0[idx] : scores0[partnerIdx],
                         isView0 ? partnerPt : pt,
                         isView0 ? scores1[partnerIdx] : scores1[idx],
                         match[2],
-                        match[2] >= scoreThresh ? "Valid Match" : "Below Threshold"
+                        "Valid Match (Selected)"
                     );
                 } else {
                     showPopup(
@@ -1505,11 +1444,140 @@ def get_html_template():
                         isView0 ? null : pt,
                         isView0 ? null : scores1[idx],
                         null,
-                        "Unmatched Keypoint"
+                        "Unmatched Keypoint (Selected)"
                     );
                 }
             } else {
-                hidePopup();
+                // Normal view (no selection)
+                
+                // 1. Draw All Keypoints if enabled
+                if (settings.showKpts) {
+                    kpts0.forEach((pt, i) => {
+                        if (scores0[i] < kptThresh) return;
+                        const cx = map.offset0.x + pt[0] * map.scale0.x;
+                        const cy = map.offset0.y + pt[1] * map.scale0.y;
+                        
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+                        ctx.fillStyle = "rgba(6, 182, 212, 0.4)";
+                        ctx.fill();
+                    });
+                    
+                    kpts1.forEach((pt, i) => {
+                        if (scores1[i] < kptThresh) return;
+                        const cx = map.offset1.x + pt[0] * map.scale1.x;
+                        const cy = map.offset1.y + pt[1] * map.scale1.y;
+                        
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+                        ctx.fillStyle = "rgba(217, 70, 239, 0.4)";
+                        ctx.fill();
+                    });
+                }
+                
+                // 2. Draw Match Lines if enabled
+                if (settings.showMatches) {
+                    if (showSelectedOnly) {
+                        if (focusPoint) {
+                            const isView0 = focusPoint.view === 0;
+                            const idx = focusPoint.index;
+                            const match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
+                            if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
+                                drawMatchLine(match, true);
+                            }
+                        }
+                    } else {
+                        if (focusPoint) {
+                            // Draw other lines very faintly
+                            filteredMatches.forEach(m => {
+                                const isFocus = (focusPoint.view === 0 && m[0] === focusPoint.index) || 
+                                                (focusPoint.view === 1 && m[1] === focusPoint.index);
+                                if (!isFocus) {
+                                    drawMatchLine(m, false, 0.04);
+                                }
+                            });
+                            // Highlight focus match line
+                            const isView0 = focusPoint.view === 0;
+                            const idx = focusPoint.index;
+                            const match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
+                            if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
+                                drawMatchLine(match, true);
+                            }
+                        } else {
+                            // Draw all normally
+                            filteredMatches.forEach(m => {
+                                drawMatchLine(m, false);
+                            });
+                        }
+                    }
+                }
+                
+                // 3. Highlight hovered point circles
+                if (hoveredPoint) {
+                    const isView0 = hoveredPoint.view === 0;
+                    const idx = hoveredPoint.index;
+                    const pt = isView0 ? kpts0[idx] : kpts1[idx];
+                    const offset = isView0 ? map.offset0 : map.offset1;
+                    const scale = isView0 ? map.scale0 : map.scale1;
+                    const hx = offset.x + pt[0] * scale.x;
+                    const hy = offset.y + pt[1] * scale.y;
+                    
+                    ctx.beginPath();
+                    ctx.arc(hx, hy, 8, 0, 2 * Math.PI);
+                    ctx.strokeStyle = isView0 ? "var(--accent-cyan)" : "var(--accent-purple)";
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    
+                    ctx.beginPath();
+                    ctx.arc(hx, hy, 3, 0, 2 * Math.PI);
+                    ctx.fillStyle = isView0 ? "var(--accent-cyan)" : "var(--accent-purple)";
+                    ctx.fill();
+                    
+                    let match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
+                    if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
+                        const partnerIdx = isView0 ? match[1] : match[0];
+                        const partnerPt = isView0 ? kpts1[partnerIdx] : kpts0[partnerIdx];
+                        const partnerOffset = isView0 ? map.offset1 : map.offset0;
+                        const partnerScale = isView0 ? map.scale1 : map.scale0;
+                        const px = partnerOffset.x + partnerPt[0] * partnerScale.x;
+                        const py = partnerOffset.y + partnerPt[1] * partnerScale.y;
+                        
+                        ctx.beginPath();
+                        ctx.arc(px, py, 7, 0, 2 * Math.PI);
+                        ctx.strokeStyle = isView0 ? "var(--accent-purple)" : "var(--accent-cyan)";
+                        ctx.lineWidth = 2;
+                        ctx.stroke();
+                        
+                        ctx.beginPath();
+                        ctx.arc(px, py, 3, 0, 2 * Math.PI);
+                        ctx.fillStyle = isView0 ? "var(--accent-purple)" : "var(--accent-cyan)";
+                        ctx.fill();
+                    }
+                    
+                    if (match) {
+                        const partnerIdx = isView0 ? match[1] : match[0];
+                        const partnerPt = isView0 ? kpts1[partnerIdx] : kpts0[partnerIdx];
+                        showPopup(
+                            isView0 ? pt : partnerPt,
+                            isView0 ? scores0[idx] : scores0[partnerIdx],
+                            isView0 ? partnerPt : pt,
+                            isView0 ? scores1[partnerIdx] : scores1[idx],
+                            match[2],
+                            match[2] >= scoreThresh ? "Valid Match" : "Below Threshold"
+                        );
+                    } else {
+                        showPopup(
+                            isView0 ? pt : null,
+                            isView0 ? scores0[idx] : null,
+                            isView0 ? null : pt,
+                            isView0 ? null : scores1[idx],
+                            null,
+                            "Unmatched Keypoint"
+                        );
+                    }
+                } else {
+                    hidePopup();
+                }
             }
         }
 
@@ -1575,12 +1643,28 @@ def get_html_template():
             }
         }
 
+        function distToSegment(p, v, w) {
+            const l2 = Math.pow(v.x - w.x, 2) + Math.pow(v.y - w.y, 2);
+            if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+        }
+
         function handleCanvasClick(mouseX, mouseY) {
             if (!activeData) return;
             
             const map = getCoordinateMapping();
             const container0 = document.getElementById("img-container-0");
             const container1 = document.getElementById("img-container-1");
+            
+            const kpts0 = activeData.keypoints0;
+            const kpts1 = activeData.keypoints1;
+            const scores0 = activeData.scores0;
+            const scores1 = activeData.scores1;
+            const matches = activeData.matches;
+            
+            const filteredMatches = matches.filter(m => m[2] >= scoreThresh && scores0[m[0]] >= kptThresh && scores1[m[1]] >= kptThresh);
             
             const inImg0 = mouseX >= map.offset0.x && mouseX <= map.offset0.x + container0.offsetWidth &&
                           mouseY >= map.offset0.y && mouseY <= map.offset0.y + container0.offsetHeight;
@@ -1589,7 +1673,7 @@ def get_html_template():
                           mouseY >= map.offset1.y && mouseY <= map.offset1.y + container1.offsetHeight;
             
             let closestPt = null;
-            let minDist = 20; // Search radius in pixels
+            let minPtDist = 20; // Search radius in pixels
             
             if (inImg0) {
                 activeData.keypoints0.forEach((pt, idx) => {
@@ -1597,8 +1681,8 @@ def get_html_template():
                     const px = map.offset0.x + pt[0] * map.scale0.x;
                     const py = map.offset0.y + pt[1] * map.scale0.y;
                     const dist = Math.hypot(mouseX - px, mouseY - py);
-                    if (dist < minDist) {
-                        minDist = dist;
+                    if (dist < minPtDist) {
+                        minPtDist = dist;
                         closestPt = { view: 0, index: idx };
                     }
                 });
@@ -1608,35 +1692,71 @@ def get_html_template():
                     const px = map.offset1.x + pt[0] * map.scale1.x;
                     const py = map.offset1.y + pt[1] * map.scale1.y;
                     const dist = Math.hypot(mouseX - px, mouseY - py);
-                    if (dist < minDist) {
-                        minDist = dist;
+                    if (dist < minPtDist) {
+                        minPtDist = dist;
                         closestPt = { view: 1, index: idx };
                     }
                 });
             }
             
+            // Search for closest match line
+            let closestMatch = null;
+            let minMatchDist = 15;
+            
+            filteredMatches.forEach(m => {
+                const p0 = kpts0[m[0]];
+                const p1 = kpts1[m[1]];
+                const x0 = map.offset0.x + p0[0] * map.scale0.x;
+                const y0 = map.offset0.y + p0[1] * map.scale0.y;
+                const x1 = map.offset1.x + p1[0] * map.scale1.x;
+                const y1 = map.offset1.y + p1[1] * map.scale1.y;
+                
+                const dist = distToSegment(
+                    { x: mouseX, y: mouseY },
+                    { x: x0, y: y0 },
+                    { x: x1, y: y1 }
+                );
+                
+                if (dist < minMatchDist) {
+                    minMatchDist = dist;
+                    closestMatch = m;
+                }
+            });
+            
             if (closestPt) {
+                const idx = closestPt.index;
+                const isV0 = closestPt.view === 0;
+                const match = matches.find(m => isV0 ? m[0] === idx : m[1] === idx);
+                
                 if (selectedPoint && selectedPoint.view === closestPt.view && selectedPoint.index === closestPt.index) {
                     clearSelection();
                 } else {
                     selectedPoint = closestPt;
-                    
-                    const isView0 = selectedPoint.view === 0;
-                    const idx = selectedPoint.index;
-                    let match = activeData.matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
-                    let detailsText = "";
-                    if (match) {
-                        detailsText = `V0 #${match[0]} ↔ V1 #${match[1]} (${(match[2]*100).toFixed(1)}% conf)`;
-                    } else {
-                        detailsText = `${isView0 ? 'View 0' : 'View 1'} #${idx} (unmatched)`;
-                    }
-                    document.getElementById("selected-match-details").innerText = detailsText;
-                    document.getElementById("selected-info").style.display = "inline-flex";
+                    updateSelectionUI(match, closestPt);
+                }
+            } else if (closestMatch) {
+                const matchPt = { view: 0, index: closestMatch[0] };
+                if (selectedPoint && selectedPoint.view === 0 && selectedPoint.index === closestMatch[0]) {
+                    clearSelection();
+                } else {
+                    selectedPoint = matchPt;
+                    updateSelectionUI(closestMatch, matchPt);
                 }
             } else {
                 clearSelection();
             }
             draw();
+        }
+
+        function updateSelectionUI(match, pt) {
+            let detailsText = "";
+            if (match) {
+                detailsText = `V0 #${match[0]} ↔ V1 #${match[1]} (${(match[2]*100).toFixed(1)}% conf)`;
+            } else {
+                detailsText = `${pt.view === 0 ? 'View 0' : 'View 1'} #${pt.index} (unmatched)`;
+            }
+            document.getElementById("selected-match-details").innerText = detailsText;
+            document.getElementById("selected-info").style.display = "inline-flex";
         }
 
         function showPopup(pt0, score0, pt1, score1, conf, status) {
