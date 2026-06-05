@@ -5,7 +5,7 @@ data:
     image_list: custom_image_list.txt
     train_size: 15
     val_size: 4
-    batch_size: 16
+    batch_size: 8
     num_workers: 8
     homography:
         difficulty: 0.9

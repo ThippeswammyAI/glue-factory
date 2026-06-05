@@ -455,6 +455,7 @@ def training(rank, conf, output_dir, args):
                     getattr(loader.dataset, conf.train.dataset_callback_fn)(
                         conf.train.seed + epoch
                     )
+        tot_it = len(train_loader) * epoch * (args.n_gpus if args.distributed else 1)
         for it, data in enumerate(train_loader):
             tot_it = (len(train_loader) * epoch + it) * (
                 args.n_gpus if args.distributed else 1

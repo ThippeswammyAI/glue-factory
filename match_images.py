@@ -16,9 +16,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("superglue_inference")
 
 # Default paths
-DEFAULT_SUPERGLUE_CKPT = "outputs/training/superpoint_custom+superglue_homography_custom_dataset/checkpoint_best.tar"
+DEFAULT_SUPERGLUE_CKPT = "outputs/training/superglue_custom_run/checkpoint_best.tar"
 DEFAULT_SUPERPOINT_CKPT = "outputs/training/superpoint_custom_run/checkpoint_best.tar"
-DEFAULT_INPUT_DIR = "data/inputs/cases3_indoor_rgb"
+DEFAULT_INPUT_DIR = "data/custom_dataset/images/reflectivity"
 DEFAULT_OUTPUT_DIR = "data/outputs/superglue_inference"
 
 def parse_args():
