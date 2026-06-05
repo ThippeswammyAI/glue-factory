@@ -985,8 +985,8 @@ def get_html_template():
             <div class="control-group">
                 <label>Keypoint Threshold</label>
                 <div class="slider-container">
-                    <input type="range" id="kpt-thresh" min="0.0" max="1" step="0.01" value="0.00" oninput="updateKptThresh(this.value)">
-                    <span class="slider-val" id="kpt-thresh-val">0.00</span>
+                    <input type="range" id="kpt-thresh" min="0.0" max="1" step="0.01" value="0.10" oninput="updateKptThresh(this.value)">
+                    <span class="slider-val" id="kpt-thresh-val">0.10</span>
                 </div>
             </div>
 
