@@ -66,19 +66,77 @@ The input dataset is generated from Ouster LiDAR scans projected into a camera f
 
 ## 3. Dataset Creation & Pre-extraction Pipeline
 
-Because the dataset size is small (~300 images) and deep neural network training requires stable signals, the pipeline implements a multi-step **self-supervised consensus bootstrapping workflow**:
+Because the dataset size is small (~300 images) and deep neural network training requires stable signals, the pipeline implements a multi-step **self-supervised consensus bootstrapping workflow**.
 
-### Step 3.1: Joint Multimodal Homographic Adaptation (MHA)
-Homographic Adaptation is a self-supervised technique that runs a base model on multiple transformed views of an image, back-projects the detections, and averages them to find stable keypoints.
-1. **Warp Modes**:
-   * **2D Homography**: Perturbs the four corners of the image boundary and applies perspective warping.
-   * **3D Projective Warp**: Leverages the spatially aligned `range` image. Reconstructs 3D coordinates using camera intrinsics ($K$), applies a random 3D rigid transform $[R \vert t]$, resolves occlusions using a **Z-buffer (depth sorting)**, and projects points back to the image.
-2. **Reprojection and Accumulation**: Keypoints detected in the warped image are mapped back to the original coordinates via the inverse projection mapping ($H^{-1}$ or 3D inverse transform).
-3. **Repeatability Score**: Detections are accumulated into a joint multimodal heatmap. The accumulation is normalized by a trials map (which tracks how many times each pixel fell within the image boundary during warping):
-   $$\text{Heatmap}(x, y) = \frac{\sum_{m \in \text{modalities}} \sum_{k=1}^N \text{Score}_{m,k}(x,y)}{\sum_{m \in \text{modalities}} \sum_{k=1}^N \mathbb{1}[\text{visible}_{m,k}(x,y)]}$$
-4. **NMS**: Non-Maximum Suppression (NMS radius = 4) isolates distinct local maxima, which are saved to `pseudo_labels.h5`.
+### Step 3.1: Detailed Multimodal Homographic Adaptation (MHA) Workflow
 
-### Step 3.2: consensus Descriptor Caching
+Homographic Adaptation runs a detector model on multiple transformed views of an image, back-projects the detections, and averages them to find stable keypoints. In our multimodal setup, this is applied across spatially-aligned LiDAR modalities.
+
+The adaptation workflow is executed in five sequential stages for each scene:
+
+```mermaid
+graph TD
+    Stage1[Stage 1: Load Modalities & Precompute 3D Coordinates] --> Stage2[Stage 2: Keypoint Detection on Base Modalities]
+    Stage2 --> Stage3[Stage 3: Random Warp Loop & Detection]
+    Stage3 --> Stage4[Stage 4: Consensus Heatmap Aggregation]
+    Stage4 --> Stage5[Stage 5: Non-Maximum Suppression & Output Export]
+```
+
+#### Stage 1: Load Modalities & Precompute 3D Coordinates
+1. **Load Modalities**: For each synchronized scan, four aligned channels are loaded:
+   - **Near-IR (`nearir`)**: Captures active ambient IR light intensity.
+   - **Reflectivity (`reflectivity`)**: Retro-reflective properties of surfaces.
+   - **Signal Strength (`signal`)**: Pulse return intensity.
+   - **Range (`range`)**: Sensor-to-object radial distance in millimeters.
+2. **Convert Range**: The `range` image is divided by 1000.0 to convert depth values to meters ($Z$).
+3. **Precompute 3D Point Cloud**: If using `3d` warp mode, camera intrinsics ($K$) are loaded. A 3D coordinate point $P$ is computed for each pixel coordinate $(u, v)$ as:
+   $$P(u, v) = Z(u, v) \cdot K^{-1} \begin{bmatrix} u \\ v \\ 1 \end{bmatrix}$$
+   This creates a coordinate lookup tensor mapping pixels to local 3D points.
+
+#### Stage 2: Keypoint Detection on Base Modalities
+1. **Iterate Modalities**: Loop through the loaded images.
+2. **EXCLUSION CONDITION (Crucial Step)**:
+   - **Condition**: If the modality name is `range`, keypoint detection is **skipped**.
+   - **Rationale**: Range images capture physical distance. The raw edges of range jumps (depth discontinuities) contain noisy, step-like artifacts. Running a gradient-based keypoint detector on range images generates noisy keypoints along depth borders that do not correspond to stable visual landmarks.
+3. **Run Detector**: The valid modalities (`nearir`, `reflectivity`, `signal`) are normalized and fed into the SuperPoint detector network to output keypoints and confidence scores.
+4. **Accumulate Base Scores**:
+   - The keypoint scores are added to a running `joint_accumulator` tensor at the integer locations of the detected pixels.
+   - A `global_trials` visibility tracker is incremented by $1.0$ for all pixels.
+
+#### Stage 3: Random Warp Loop & Detection
+For $N$ random trials (default $N=15$):
+1. **Sample Warp Transform**:
+   - **3D Mode**: A random 3D rigid transform (rotation $R$, translation $t$) is generated.
+   - **2D Mode**: A random homography matrix $H$ is sampled.
+2. **Warp Modalities**:
+   - **3D Projective Warp**:
+     - The precomputed 3D points are transformed: $P' = R P + t$.
+     - Points are projected back to the image plane: $p' = K P'$.
+     - **Z-Buffer Occlusion Resolution**: For pixels where multiple 3D points project to the same 2D coordinate, the point with the smallest depth $z'$ is kept.
+     - Coordinate mapping tensors are generated, and all modalities (including `range`) are warped using grid sampling.
+   - **2D Homography Warp**: Images are warped using the homography matrix $H$.
+3. **Keypoint Detection on Warped Modalities**:
+   - Loop through the warped modalities: `nearir`, `reflectivity`, `signal`.
+   - **EXCLUSION CONDITION**: Once again, the warped `range` modality is **skipped** for keypoint detection.
+   - Run the SuperPoint detector on the warped images to obtain keypoint coordinates and confidence scores.
+4. **Reprojection and Accumulation**:
+   - The detected warped keypoint coordinates are reprojected back to the original image coordinates using the inverse transform ($H^{-1}$ or inverse 3D projection).
+   - Keypoints that fall back inside the original image dimensions are accumulated into the `joint_accumulator`.
+   - The `global_trials` accumulator is incremented for all original pixels that were mapped to valid coordinates inside the warped patch bounds (i.e. visible pixels).
+
+#### Stage 4: Consensus Heatmap Aggregation
+- After completing all modalities and warps, the consensus repeatability score heatmap is calculated by dividing the accumulated confidence scores by the total visibility trial count at each pixel:
+  $$\text{Heatmap}(x, y) = \frac{\text{joint\_accumulator}(x, y)}{\text{global\_trials}(x, y)}$$
+- A filtering condition is applied: only pixels with a consensus score $> 0.015$ are retained as candidate keypoints.
+
+#### Stage 5: Non-Maximum Suppression (NMS) & Output Export
+- Non-Maximum Suppression (NMS) with a radius of 4 is run on the consensus heatmap to find local peaks and suppress nearby duplicate detections.
+- The resulting keypoint coordinates and confidence scores are written to `pseudo_labels.h5`.
+
+---
+
+### Step 3.2: Consensus Descriptor Caching
+
 To train SuperGlue, we require the descriptor space of our custom-trained SuperPoint model. We pre-extract and cache these features:
 1. Load the fine-tuned SuperPoint weights.
 2. Feed the `reflectivity` image through the custom SuperPoint VGG backbone to compute dense feature maps.
