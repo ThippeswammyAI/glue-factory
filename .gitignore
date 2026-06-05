@@ -7,3 +7,5 @@
 /data/
 /outputs/
 __pycache__
+back_data_and models.zip
+*.zip
