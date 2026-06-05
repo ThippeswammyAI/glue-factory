@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument(
         "--filter_threshold",
         type=float,
-        default=0.2,
+        default=0.01,
         help="SuperGlue match confidence filtering threshold.",
     )
     return parser.parse_args()
@@ -669,7 +669,7 @@ def get_html_template():
 
         .slider-container input[type="range"] {
             -webkit-appearance: none;
-            width: 180px;
+            width: 150px;
             height: 5px;
             border-radius: 3px;
             background: rgba(255, 255, 255, 0.1);
@@ -702,14 +702,14 @@ def get_html_template():
 
         .toggle-group {
             display: flex;
-            gap: 12px;
+            gap: 8px;
         }
 
         .btn-toggle {
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid rgba(255, 255, 255, 0.1);
             color: var(--text-secondary);
-            padding: 8px 16px;
+            padding: 8px 14px;
             border-radius: 10px;
             font-family: var(--font-main);
             font-size: 13px;
@@ -756,19 +756,28 @@ def get_html_template():
             min-height: 480px;
             box-shadow: inset 0 0 40px rgba(0,0,0,0.5), 0 12px 40px rgba(0,0,0,0.3);
             overflow: hidden;
+            cursor: grab;
+        }
+
+        .visualization-box:active {
+            cursor: grabbing;
         }
 
         .image-pair-wrapper {
             position: relative;
             display: flex;
-            gap: 32px;
+            flex-direction: column; /* Stack view0 on top, view1 on bottom! */
+            gap: 24px;
             align-items: center;
             justify-content: center;
             padding: 10px;
             border-radius: 12px;
             background: rgba(0, 0, 0, 0.3);
             border: 1px solid rgba(255,255,255,0.03);
-            max-width: 100%;
+            max-width: 95%;
+            transform-origin: center center;
+            transition: transform 0.05s ease-out;
+            user-select: none;
         }
 
         .image-container {
@@ -782,7 +791,7 @@ def get_html_template():
         .image-container img {
             display: block;
             max-width: 100%;
-            max-height: 50vh;
+            max-height: 38vh; /* Scale images nicely for vertical stack */
             height: auto;
             user-select: none;
             -webkit-user-drag: none;
@@ -812,11 +821,11 @@ def get_html_template():
             left: 0;
             width: 100%;
             height: 100%;
-            pointer-events: auto; /* Enable mouse hover over the canvas! */
+            pointer-events: auto; /* Enable mouse events over the canvas! */
             z-index: 8;
         }
 
-        /* Hover Detail Popup */
+        /* Hover/Select Detail Popup */
         .info-popup {
             position: absolute;
             bottom: 24px;
@@ -968,8 +977,8 @@ def get_html_template():
             <div class="control-group">
                 <label>Match Confidence Threshold</label>
                 <div class="slider-container">
-                    <input type="range" id="score-thresh" min="0.0" max="1.0" step="0.02" value="0.20" oninput="updateScoreThresh(this.value)">
-                    <span class="slider-val" id="score-thresh-val">0.20</span>
+                    <input type="range" id="score-thresh" min="0.0" max="1.0" step="0.01" value="0.01" oninput="updateScoreThresh(this.value)">
+                    <span class="slider-val" id="score-thresh-val">0.01</span>
                 </div>
             </div>
             
@@ -986,6 +995,24 @@ def get_html_template():
                 <div class="toggle-group">
                     <button class="btn-toggle active" id="btn-show-kpts" onclick="toggleLayer('kpts')">Keypoints</button>
                     <button class="btn-toggle active" id="btn-show-matches" onclick="toggleLayer('matches')">Match Lines</button>
+                    <button class="btn-toggle" id="btn-show-selected-only" onclick="toggleSelectedOnly()">Selected Match Only</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Zoom & Pan</label>
+                <div class="toggle-group">
+                    <button class="btn-toggle" onclick="zoomIn()">Zoom In</button>
+                    <button class="btn-toggle" onclick="zoomOut()">Zoom Out</button>
+                    <button class="btn-toggle" onclick="resetZoom()">Reset</button>
+                </div>
+            </div>
+
+            <div class="control-group" id="selected-info" style="display: none; align-items: flex-start;">
+                <label style="color: var(--accent-cyan); margin-bottom: 0;">Selected Match</label>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span id="selected-match-details" style="font-family: var(--font-mono); font-size: 12px; color: var(--accent-cyan);">-</span>
+                    <button class="btn-toggle" style="padding: 2px 8px; font-size: 11px;" onclick="clearSelection()">Clear</button>
                 </div>
             </div>
         </div>
@@ -1052,7 +1079,7 @@ def get_html_template():
     <script>
         let activeIdx = 0;
         let activeData = null;
-        let scoreThresh = 0.20;
+        let scoreThresh = 0.01;
         let kptThresh = 0.00;
         
         let settings = {
@@ -1061,6 +1088,19 @@ def get_html_template():
         };
 
         let hoveredPoint = null; // { view: 0/1, index: idx }
+        let selectedPoint = null; // { view: 0/1, index: idx }
+        let showSelectedOnly = false;
+
+        // Zoom & Pan variables
+        let zoom = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let isMouseDown = false;
+        let hasDragged = false;
+        let dragStartX = 0;
+        let dragStartY = 0;
+        let initialPanX = 0;
+        let initialPanY = 0;
         
         const loader = document.getElementById("loader");
         const pairList = document.getElementById("pair-list");
@@ -1070,6 +1110,7 @@ def get_html_template():
         const img0 = document.getElementById("img-0");
         const img1 = document.getElementById("img-1");
         const container = document.getElementById("image-pair-wrapper");
+        const vizBox = document.querySelector(".visualization-box");
 
         window.onload = function() {
             if (typeof MATCHES_DATA === 'undefined' || MATCHES_DATA.length === 0) {
@@ -1088,6 +1129,58 @@ def get_html_template():
             // Set up canvas event listeners for mouse interactions
             canvas.addEventListener('mousemove', handleMouseMove);
             canvas.addEventListener('mouseleave', handleMouseLeave);
+
+            // Zoom & Pan Mouse Events on the visualization-box
+            vizBox.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return; // Only left click
+                isMouseDown = true;
+                hasDragged = false;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                initialPanX = panX;
+                initialPanY = panY;
+            });
+
+            window.addEventListener('mousemove', function(e) {
+                if (!isMouseDown) return;
+                const dx = e.clientX - dragStartX;
+                const dy = e.clientY - dragStartY;
+                
+                if (Math.hypot(dx, dy) > 3) {
+                    hasDragged = true;
+                    panX = initialPanX + dx;
+                    panY = initialPanY + dy;
+                    updateTransform();
+                }
+            });
+
+            window.addEventListener('mouseup', function(e) {
+                if (isMouseDown) {
+                    isMouseDown = false;
+                    if (!hasDragged) {
+                        // Click event! check if inside canvas
+                        const canvasRect = canvas.getBoundingClientRect();
+                        if (e.clientX >= canvasRect.left && e.clientX <= canvasRect.right &&
+                            e.clientY >= canvasRect.top && e.clientY <= canvasRect.bottom) {
+                            // Compute unscaled canvas coordinate mapping
+                            const x = (e.clientX - canvasRect.left) * (canvas.width / canvasRect.width);
+                            const y = (e.clientY - canvasRect.top) * (canvas.height / canvasRect.height);
+                            handleCanvasClick(x, y);
+                        }
+                    }
+                }
+            });
+
+            vizBox.addEventListener('wheel', function(e) {
+                e.preventDefault();
+                const zoomSpeed = 0.05;
+                if (e.deltaY < 0) {
+                    zoom = Math.min(zoom + zoomSpeed, 5.0);
+                } else {
+                    zoom = Math.max(zoom - zoomSpeed, 0.4);
+                }
+                updateTransform();
+            }, { passive: false });
         };
 
         function buildPairList() {
@@ -1114,7 +1207,6 @@ def get_html_template():
         }
 
         function selectPair(idx) {
-            // Update active state in sidebar
             const prevActive = document.querySelector(".pair-item.active");
             if (prevActive) prevActive.classList.remove("active");
             
@@ -1124,15 +1216,14 @@ def get_html_template():
             activeIdx = idx;
             activeData = MATCHES_DATA[idx];
             
-            // Update titles
             document.getElementById("active-filename").innerText = `${activeData.name0} ↔ ${activeData.name1}`;
             document.getElementById("active-original-image").innerText = `Image size: ${activeData.image_width}x${activeData.image_height}`;
             
-            // Clear hover state
+            // Clear hover/selection states
             hoveredPoint = null;
-            hidePopup();
+            clearSelection();
+            resetZoom();
 
-            // Load images
             let loadedCount = 0;
             const onImageLoad = () => {
                 loadedCount++;
@@ -1150,21 +1241,19 @@ def get_html_template():
         }
 
         function resizeCanvas() {
-            const containerRect = container.getBoundingClientRect();
-            canvas.width = containerRect.width;
-            canvas.height = containerRect.height;
+            canvas.width = container.offsetWidth;
+            canvas.height = container.offsetHeight;
         }
 
         function getCoordinateMapping() {
-            const rect0 = img0.getBoundingClientRect();
-            const rect1 = img1.getBoundingClientRect();
-            const containerRect = container.getBoundingClientRect();
+            const container0 = document.getElementById("img-container-0");
+            const container1 = document.getElementById("img-container-1");
             
             return {
-                offset0: { x: rect0.left - containerRect.left, y: rect0.top - containerRect.top },
-                offset1: { x: rect1.left - containerRect.left, y: rect1.top - containerRect.top },
-                scale0: { x: rect0.width / activeData.image_width, y: rect0.height / activeData.image_height },
-                scale1: { x: rect1.width / activeData.image_width, y: rect1.height / activeData.image_height }
+                offset0: { x: container0.offsetLeft, y: container0.offsetTop },
+                offset1: { x: container1.offsetLeft, y: container1.offsetTop },
+                scale0: { x: container0.offsetWidth / activeData.image_width, y: container0.offsetHeight / activeData.image_height },
+                scale1: { x: container1.offsetWidth / activeData.image_width, y: container1.offsetHeight / activeData.image_height }
             };
         }
 
@@ -1191,6 +1280,80 @@ def get_html_template():
             draw();
         }
 
+        function toggleSelectedOnly() {
+            showSelectedOnly = !showSelectedOnly;
+            document.getElementById("btn-show-selected-only").classList.toggle("active", showSelectedOnly);
+            draw();
+        }
+
+        function updateTransform() {
+            container.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+        }
+
+        function zoomIn() {
+            zoom = Math.min(zoom + 0.25, 5.0);
+            updateTransform();
+        }
+
+        function zoomOut() {
+            zoom = Math.max(zoom - 0.25, 0.4);
+            updateTransform();
+        }
+
+        function resetZoom() {
+            zoom = 1.0;
+            panX = 0;
+            panY = 0;
+            updateTransform();
+        }
+
+        function clearSelection() {
+            selectedPoint = null;
+            document.getElementById("selected-info").style.display = "none";
+            draw();
+        }
+
+        function drawMatchLine(m, isHighlighted, opacityOverride) {
+            const map = getCoordinateMapping();
+            const kpts0 = activeData.keypoints0;
+            const kpts1 = activeData.keypoints1;
+            
+            const idx0 = m[0];
+            const idx1 = m[1];
+            const conf = m[2];
+            
+            const p0 = kpts0[idx0];
+            const p1 = kpts1[idx1];
+            
+            const x0 = map.offset0.x + p0[0] * map.scale0.x;
+            const y0 = map.offset0.y + p0[1] * map.scale0.y;
+            const x1 = map.offset1.x + p1[0] * map.scale1.x;
+            const y1 = map.offset1.y + p1[1] * map.scale1.y;
+            
+            ctx.beginPath();
+            ctx.moveTo(x0, y0);
+            ctx.lineTo(x1, y1);
+            
+            if (isHighlighted) {
+                const gradient = ctx.createLinearGradient(x0, y0, x1, y1);
+                gradient.addColorStop(0, "var(--accent-cyan)");
+                gradient.addColorStop(1, "var(--accent-purple)");
+                ctx.strokeStyle = gradient;
+                ctx.lineWidth = 3.5;
+                ctx.shadowColor = conf >= scoreThresh ? "var(--accent-green)" : "var(--accent-red)";
+                ctx.shadowBlur = 8;
+            } else {
+                const opacity = opacityOverride !== undefined ? opacityOverride : (0.15 + conf * 0.55);
+                const gradient = ctx.createLinearGradient(x0, y0, x1, y1);
+                gradient.addColorStop(0, `rgba(6, 182, 212, ${opacity})`);
+                gradient.addColorStop(1, `rgba(217, 70, 239, ${opacity})`);
+                ctx.strokeStyle = gradient;
+                ctx.lineWidth = 1 + conf * 1.5;
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0; // Reset shadow
+        }
+
         function draw() {
             if (!activeData || !img0.complete || !img1.complete) return;
             
@@ -1203,7 +1366,7 @@ def get_html_template():
             const kpts1 = activeData.keypoints1;
             const scores0 = activeData.scores0;
             const scores1 = activeData.scores1;
-            const matches = activeData.matches; // list of [idx0, idx1, score]
+            const matches = activeData.matches;
             
             // Calculate filtered matches count
             const filteredMatches = matches.filter(m => m[2] >= scoreThresh && scores0[m[0]] >= kptThresh && scores1[m[1]] >= kptThresh);
@@ -1218,9 +1381,10 @@ def get_html_template():
             const avgScore = filteredMatches.length > 0 ? (sumScore / filteredMatches.length).toFixed(2) : "0.00";
             document.getElementById("stat-score").innerText = avgScore;
             
+            const focusPoint = hoveredPoint || selectedPoint;
+            
             // 1. Draw All Keypoints if enabled
             if (settings.showKpts) {
-                // Keypoints View 0
                 kpts0.forEach((pt, i) => {
                     if (scores0[i] < kptThresh) return;
                     const cx = map.offset0.x + pt[0] * map.scale0.x;
@@ -1232,7 +1396,6 @@ def get_html_template():
                     ctx.fill();
                 });
                 
-                // Keypoints View 1
                 kpts1.forEach((pt, i) => {
                     if (scores1[i] < kptThresh) return;
                     const cx = map.offset1.x + pt[0] * map.scale1.x;
@@ -1246,60 +1409,46 @@ def get_html_template():
             }
             
             // 2. Draw Match Lines if enabled
-            if (settings.showMatches && !hoveredPoint) {
-                filteredMatches.forEach(m => {
-                    const idx0 = m[0];
-                    const idx1 = m[1];
-                    const conf = m[2];
-                    
-                    const p0 = kpts0[idx0];
-                    const p1 = kpts1[idx1];
-                    
-                    const x0 = map.offset0.x + p0[0] * map.scale0.x;
-                    const y0 = map.offset0.y + p0[1] * map.scale0.y;
-                    const x1 = map.offset1.x + p1[0] * map.scale1.x;
-                    const y1 = map.offset1.y + p1[1] * map.scale1.y;
-                    
-                    // Create gradient color for line
-                    const gradient = ctx.createLinearGradient(x0, y0, x1, y1);
-                    gradient.addColorStop(0, `rgba(6, 182, 212, ${0.15 + conf * 0.55})`);
-                    gradient.addColorStop(1, `rgba(217, 70, 239, ${0.15 + conf * 0.55})`);
-                    
-                    ctx.beginPath();
-                    ctx.moveTo(x0, y0);
-                    ctx.lineTo(x1, y1);
-                    ctx.strokeStyle = gradient;
-                    ctx.lineWidth = 1 + conf * 1.5;
-                    ctx.stroke();
-                });
+            if (settings.showMatches) {
+                if (showSelectedOnly) {
+                    if (focusPoint) {
+                        const isView0 = focusPoint.view === 0;
+                        const idx = focusPoint.index;
+                        const match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
+                        if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
+                            drawMatchLine(match, true);
+                        }
+                    }
+                } else {
+                    if (focusPoint) {
+                        // Draw other lines very faintly
+                        filteredMatches.forEach(m => {
+                            const isFocus = (focusPoint.view === 0 && m[0] === focusPoint.index) || 
+                                            (focusPoint.view === 1 && m[1] === focusPoint.index);
+                            if (!isFocus) {
+                                drawMatchLine(m, false, 0.04);
+                            }
+                        });
+                        // Highlight focus match line
+                        const isView0 = focusPoint.view === 0;
+                        const idx = focusPoint.index;
+                        const match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
+                        if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
+                            drawMatchLine(match, true);
+                        }
+                    } else {
+                        // Draw all normally
+                        filteredMatches.forEach(m => {
+                            drawMatchLine(m, false);
+                        });
+                    }
+                }
             }
             
-            // 3. Draw Hovered Point & Match
-            if (hoveredPoint) {
-                const isView0 = hoveredPoint.view === 0;
-                const idx = hoveredPoint.index;
-                
-                // Draw all other match lines very faintly
-                filteredMatches.forEach(m => {
-                    if ((isView0 && m[0] === idx) || (!isView0 && m[1] === idx)) return;
-                    
-                    const p0 = kpts0[m[0]];
-                    const p1 = kpts1[m[1]];
-                    
-                    const x0 = map.offset0.x + p0[0] * map.scale0.x;
-                    const y0 = map.offset0.y + p0[1] * map.scale0.y;
-                    const x1 = map.offset1.x + p1[0] * map.scale1.x;
-                    const y1 = map.offset1.y + p1[1] * map.scale1.y;
-                    
-                    ctx.beginPath();
-                    ctx.moveTo(x0, y0);
-                    ctx.lineTo(x1, y1);
-                    ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
-                });
-                
-                // Highlight hovered point
+            // 3. Highlight focused point circles
+            if (focusPoint) {
+                const isView0 = focusPoint.view === 0;
+                const idx = focusPoint.index;
                 const pt = isView0 ? kpts0[idx] : kpts1[idx];
                 const offset = isView0 ? map.offset0 : map.offset1;
                 const scale = isView0 ? map.scale0 : map.scale1;
@@ -1317,24 +1466,15 @@ def get_html_template():
                 ctx.fillStyle = isView0 ? "var(--accent-cyan)" : "var(--accent-purple)";
                 ctx.fill();
                 
-                // Find match for this point
-                let match = null;
-                if (isView0) {
-                    match = matches.find(m => m[0] === idx);
-                } else {
-                    match = matches.find(m => m[1] === idx);
-                }
-                
-                if (match) {
+                let match = matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
+                if (match && match[2] >= scoreThresh && scores0[match[0]] >= kptThresh && scores1[match[1]] >= kptThresh) {
                     const partnerIdx = isView0 ? match[1] : match[0];
                     const partnerPt = isView0 ? kpts1[partnerIdx] : kpts0[partnerIdx];
                     const partnerOffset = isView0 ? map.offset1 : map.offset0;
                     const partnerScale = isView0 ? map.scale1 : map.scale0;
                     const px = partnerOffset.x + partnerPt[0] * partnerScale.x;
                     const py = partnerOffset.y + partnerPt[1] * partnerScale.y;
-                    const conf = match[2];
                     
-                    // Highlight partner point
                     ctx.beginPath();
                     ctx.arc(px, py, 7, 0, 2 * Math.PI);
                     ctx.strokeStyle = isView0 ? "var(--accent-purple)" : "var(--accent-cyan)";
@@ -1345,41 +1485,20 @@ def get_html_template():
                     ctx.arc(px, py, 3, 0, 2 * Math.PI);
                     ctx.fillStyle = isView0 ? "var(--accent-purple)" : "var(--accent-cyan)";
                     ctx.fill();
-                    
-                    // Draw match line in bold glowing style
-                    ctx.beginPath();
-                    ctx.moveTo(hx, hy);
-                    ctx.lineTo(px, py);
-                    
-                    const gradient = ctx.createLinearGradient(hx, hy, px, py);
-                    if (isView0) {
-                        gradient.addColorStop(0, "var(--accent-cyan)");
-                        gradient.addColorStop(1, "var(--accent-purple)");
-                    } else {
-                        gradient.addColorStop(0, "var(--accent-purple)");
-                        gradient.addColorStop(1, "var(--accent-cyan)");
-                    }
-                    
-                    ctx.strokeStyle = gradient;
-                    ctx.lineWidth = 3;
-                    ctx.shadowColor = conf >= scoreThresh ? "var(--accent-green)" : "var(--accent-red)";
-                    ctx.shadowBlur = 8;
-                    ctx.stroke();
-                    
-                    // Reset shadow
-                    ctx.shadowBlur = 0;
-                    
-                    // Show details popup
+                }
+                
+                if (match) {
+                    const partnerIdx = isView0 ? match[1] : match[0];
+                    const partnerPt = isView0 ? kpts1[partnerIdx] : kpts0[partnerIdx];
                     showPopup(
                         isView0 ? pt : partnerPt,
                         isView0 ? scores0[idx] : scores0[partnerIdx],
                         isView0 ? partnerPt : pt,
                         isView0 ? scores1[partnerIdx] : scores1[idx],
-                        conf,
-                        conf >= scoreThresh ? "Valid Match" : "Below Threshold"
+                        match[2],
+                        match[2] >= scoreThresh ? "Valid Match" : "Below Threshold"
                     );
                 } else {
-                    // Unmatched point
                     showPopup(
                         isView0 ? pt : null,
                         isView0 ? scores0[idx] : null,
@@ -1389,24 +1508,27 @@ def get_html_template():
                         "Unmatched Keypoint"
                     );
                 }
+            } else {
+                hidePopup();
             }
         }
 
         function handleMouseMove(e) {
-            if (!activeData) return;
+            if (!activeData || isMouseDown) return;
             
             const rect = canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
+            const mouseX = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
             
             const map = getCoordinateMapping();
+            const container0 = document.getElementById("img-container-0");
+            const container1 = document.getElementById("img-container-1");
             
-            // Check if mouse is inside image 0 or image 1
-            const inImg0 = mouseX >= map.offset0.x && mouseX <= map.offset0.x + img0.clientWidth &&
-                          mouseY >= map.offset0.y && mouseY <= map.offset0.y + img0.clientHeight;
-                          
-            const inImg1 = mouseX >= map.offset1.x && mouseX <= map.offset1.x + img1.clientWidth &&
-                          mouseY >= map.offset1.y && mouseY <= map.offset1.y + img1.clientHeight;
+            const inImg0 = mouseX >= map.offset0.x && mouseX <= map.offset0.x + container0.offsetWidth &&
+                          mouseY >= map.offset0.y && mouseY <= map.offset0.y + container0.offsetHeight;
+                           
+            const inImg1 = mouseX >= map.offset1.x && mouseX <= map.offset1.x + container1.offsetWidth &&
+                          mouseY >= map.offset1.y && mouseY <= map.offset1.y + container1.offsetHeight;
             
             let closestPt = null;
             let minDist = 15; // Search radius in pixels
@@ -1442,7 +1564,6 @@ def get_html_template():
                 }
             } else if (hoveredPoint) {
                 hoveredPoint = null;
-                hidePopup();
                 draw();
             }
         }
@@ -1450,9 +1571,72 @@ def get_html_template():
         function handleMouseLeave() {
             if (hoveredPoint) {
                 hoveredPoint = null;
-                hidePopup();
                 draw();
             }
+        }
+
+        function handleCanvasClick(mouseX, mouseY) {
+            if (!activeData) return;
+            
+            const map = getCoordinateMapping();
+            const container0 = document.getElementById("img-container-0");
+            const container1 = document.getElementById("img-container-1");
+            
+            const inImg0 = mouseX >= map.offset0.x && mouseX <= map.offset0.x + container0.offsetWidth &&
+                          mouseY >= map.offset0.y && mouseY <= map.offset0.y + container0.offsetHeight;
+                           
+            const inImg1 = mouseX >= map.offset1.x && mouseX <= map.offset1.x + container1.offsetWidth &&
+                          mouseY >= map.offset1.y && mouseY <= map.offset1.y + container1.offsetHeight;
+            
+            let closestPt = null;
+            let minDist = 20; // Search radius in pixels
+            
+            if (inImg0) {
+                activeData.keypoints0.forEach((pt, idx) => {
+                    if (activeData.scores0[idx] < kptThresh) return;
+                    const px = map.offset0.x + pt[0] * map.scale0.x;
+                    const py = map.offset0.y + pt[1] * map.scale0.y;
+                    const dist = Math.hypot(mouseX - px, mouseY - py);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestPt = { view: 0, index: idx };
+                    }
+                });
+            } else if (inImg1) {
+                activeData.keypoints1.forEach((pt, idx) => {
+                    if (activeData.scores1[idx] < kptThresh) return;
+                    const px = map.offset1.x + pt[0] * map.scale1.x;
+                    const py = map.offset1.y + pt[1] * map.scale1.y;
+                    const dist = Math.hypot(mouseX - px, mouseY - py);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestPt = { view: 1, index: idx };
+                    }
+                });
+            }
+            
+            if (closestPt) {
+                if (selectedPoint && selectedPoint.view === closestPt.view && selectedPoint.index === closestPt.index) {
+                    clearSelection();
+                } else {
+                    selectedPoint = closestPt;
+                    
+                    const isView0 = selectedPoint.view === 0;
+                    const idx = selectedPoint.index;
+                    let match = activeData.matches.find(m => isView0 ? m[0] === idx : m[1] === idx);
+                    let detailsText = "";
+                    if (match) {
+                        detailsText = `V0 #${match[0]} ↔ V1 #${match[1]} (${(match[2]*100).toFixed(1)}% conf)`;
+                    } else {
+                        detailsText = `${isView0 ? 'View 0' : 'View 1'} #${idx} (unmatched)`;
+                    }
+                    document.getElementById("selected-match-details").innerText = detailsText;
+                    document.getElementById("selected-info").style.display = "inline-flex";
+                }
+            } else {
+                clearSelection();
+            }
+            draw();
         }
 
         function showPopup(pt0, score0, pt1, score1, conf, status) {
