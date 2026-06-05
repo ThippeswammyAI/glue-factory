@@ -1,6 +1,6 @@
 data:
     name: homographies
-    data_dir: custom_dataset1
+    data_dir: output/dataset
     image_dir: images
     image_list: custom_image_list.txt
     train_size: 64
@@ -15,7 +15,7 @@ data:
         name: lg
     load_features:
         do: True
-        path: "custom_dataset1/exports/pseudo_labels.h5"
+        path: "output/dataset/exports/pseudo_labels.h5"
         collate: False
         max_num_keypoints: 512
         force_num_keypoints: True

@@ -1,6 +1,6 @@
 data:
     name: homographies
-    data_dir: custom_dataset
+    data_dir: output/sample_data
     image_dir: images
     image_list: custom_image_list.txt
     train_size: 15
@@ -15,7 +15,7 @@ data:
         name: lg
     load_features:
         do: True
-        path: "exports/custom_dataset_consensus_SP.h5"
+        path: "output/sample_data/exports/custom_dataset_consensus_SP.h5"
         collate: False
         max_num_keypoints: 512
         force_num_keypoints: True

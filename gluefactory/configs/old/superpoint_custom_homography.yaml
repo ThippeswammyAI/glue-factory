@@ -1,12 +1,12 @@
 data:
     name: homographies
-    data_dir: output/dataset
+    data_dir: custom_dataset1
     image_dir: images
     image_list: custom_image_list.txt
     train_size: 64
     val_size: 16
     batch_size: 4
-    num_workers: 4
+    num_workers: 16
     homography:
         difficulty: 0.7
         max_angle: 45
@@ -15,23 +15,25 @@ data:
         name: lg
     load_features:
         do: True
-        path: "output/dataset/exports/custom_SP-k2048-nms4.h5"
+        path: "custom_dataset1/exports/pseudo_labels.h5"
         collate: False
         max_num_keypoints: 512
         force_num_keypoints: True
 model:
     name: two_view_pipeline
     extractor:
-        name: null
-    allow_no_extract: True
+        name: extractors.superpoint_open
+        max_num_keypoints: 512
+        force_num_keypoints: True
+        detection_threshold: -1
+        nms_radius: 4
+        trainable: True
+        lambda_d: 1.0
+        dense_outputs: True
     ground_truth:
-        name: matchers.homography_matcher
-        th_positive: 3
-        th_negative: 3
+        name: null
     matcher:
-        name: gluefactory_nonfree.superglue
-        weights: outdoor
-        filter_threshold: 0.2
+        name: null
 train:
     seed: 0
     epochs: 1000
@@ -43,4 +45,4 @@ train:
         type: exp
         on_epoch: true
         exp_div_10: 10
-    plot: [1, 'gluefactory.visualization.visualize_batch.make_match_figures']
+    plot: [1, 'gluefactory.visualization.visualize_batch.make_keypoint_figures']
