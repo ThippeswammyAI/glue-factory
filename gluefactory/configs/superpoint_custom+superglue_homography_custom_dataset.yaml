@@ -5,17 +5,17 @@ data:
     image_list: custom_image_list.txt
     train_size: 15
     val_size: 4
-    batch_size: 4
-    num_workers: 4
+    batch_size: 16
+    num_workers: 8
     homography:
-        difficulty: 0.7
-        max_angle: 45
+        difficulty: 0.9
+        max_angle: 30
         patch_shape: [512, 208]
     photometric:
         name: lg
     load_features:
         do: True
-        path: "exports/custom_dataset_custom_SP-k2048-nms4.h5"
+        path: "exports/custom_dataset_boosted_SP.h5"
         collate: False
         max_num_keypoints: 512
         force_num_keypoints: True
@@ -31,10 +31,12 @@ model:
     matcher:
         name: gluefactory_nonfree.superglue
         weights: outdoor
-        filter_threshold: 0.2
+        filter_threshold: 0.05
+        flash: false
+        checkpointed: true
 train:
     seed: 0
-    epochs: 1000
+    epochs: 100
     log_every_iter: 1
     eval_every_iter: 10
     lr: 1e-4
@@ -44,3 +46,8 @@ train:
         on_epoch: true
         exp_div_10: 10
     plot: [1, 'gluefactory.visualization.visualize_batch.make_match_figures']
+benchmarks:
+    hpatches:
+      eval:
+        estimator: opencv
+        ransac_th: 0.5

@@ -14,3 +14,6 @@ All training logs and summaries are saved in the outputs/training/ directory. Ru
 
 bash
 tensorboard --logdir outputs/training/
+
+
+python3 match_images.py --input data/custom_dataset/images/reflectivity --output_dir data/outputs/superglue_inference_reflectivity
