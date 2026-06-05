@@ -15,10 +15,32 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("visualize_custom")
 
 def main():
-    # Define directories
-    checkpoint_path = Path("outputs/training/superpoint_custom_run/checkpoint_best.tar")
-    images_dir = Path("data/inputs/cases3_indoor_rgb")
-    output_dir = Path("data/inputs/outputs/cases3_indoor_rgb/visualizations_trained")
+    parser = argparse.ArgumentParser(description="Visualize trained SuperPoint detections.")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default="outputs/training/superpoint_custom_run/checkpoint_best.tar",
+        help="Path to trained checkpoint."
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="output/sample_data",
+        help="Dataset name (e.g. output/sample_data)."
+    )
+    parser.add_argument(
+        "--modality",
+        type=str,
+        default="reflectivity",
+        help="Modality prefix (e.g. reflectivity, nearir, signal)."
+    )
+    args = parser.parse_args()
+    
+    from gluefactory.settings import DATA_PATH
+    dataset_dir = DATA_PATH / args.dataset
+    checkpoint_path = Path(args.checkpoint)
+    images_dir = dataset_dir / "images" / args.modality
+    output_dir = dataset_dir / "visualizations/custom_detections"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     if not checkpoint_path.exists():

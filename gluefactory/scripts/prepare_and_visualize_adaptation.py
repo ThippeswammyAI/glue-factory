@@ -446,6 +446,8 @@ def multimodal_homographic_adaptation(image_name, images_dir, model, num_warps=1
     
     # Process each modality
     for mod_name, img in loaded_imgs.items():
+        if mod_name == "range":
+            continue
         # 1. Base detection on original image
         if use_gpu:
             img_feed_t = loaded_imgs_feed_t[mod_name]
@@ -750,7 +752,9 @@ def save_visualizations(scene_name, kpts, scores, loaded_imgs, warped_samples, o
     cbar.ax.xaxis.set_tick_params(color="white")
     plt.setp(plt.getp(cbar.ax.axes, "xticklabels"), color="white")
     
-    consensus_path = output_dir / f"{Path(scene_name).stem}_consensus.png"
+    consensus_dir = output_dir / "consensus"
+    consensus_dir.mkdir(exist_ok=True, parents=True)
+    consensus_path = consensus_dir / f"{Path(scene_name).stem}_consensus.png"
     plt.savefig(consensus_path, bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
     plt.close()
     
@@ -778,7 +782,9 @@ def save_visualizations(scene_name, kpts, scores, loaded_imgs, warped_samples, o
                 ax.scatter(w_kpts[:, 0], w_kpts[:, 1], c=w_scores, cmap="plasma", s=10, edgecolors="none", alpha=0.8)
             ax.set_title(f"Intermediate Warp {idx+1}", color="#fc4445", fontsize=11, pad=10)
             
-        warps_path = output_dir / f"{Path(scene_name).stem}_warped_samples.png"
+        warps_dir = output_dir / "warped_samples"
+        warps_dir.mkdir(exist_ok=True, parents=True)
+        warps_path = warps_dir / f"{Path(scene_name).stem}_warped_samples.png"
         plt.savefig(warps_path, bbox_inches="tight", facecolor=fig_w.get_facecolor(), edgecolor="none")
         plt.close()
 
@@ -943,7 +949,7 @@ def main():
             
     # Copy the first scene visualization as the default overview
     sample_stem = Path(image_names[0]).stem
-    default_consensus = visualizations_dir / f"{sample_stem}_consensus.png"
+    default_consensus = visualizations_dir / "consensus" / f"{sample_stem}_consensus.png"
     default_overview = dataset_dir / "adaptation_visualization.png"
     if default_consensus.exists():
         import shutil

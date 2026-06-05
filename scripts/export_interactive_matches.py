@@ -9,14 +9,24 @@ from gluefactory.datasets.homographies import HomographyDataset
 from gluefactory.geometry.gt_generation import gt_matches_from_homography
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Export interactive match visualization dashboard")
+    parser.add_argument("--dataset", type=str, default="output/sample_data", help="Dataset directory name under data/")
+    parser.add_argument("--conf", type=str, default="gluefactory/configs/superpoint_custom+superglue_homography_custom_dataset.yaml", help="Configuration file path")
+    args = parser.parse_args()
+    
+    from gluefactory.settings import DATA_PATH
+    dataset_dir = DATA_PATH / args.dataset
+    
     # Define directories
-    output_dir = Path("data/custom_dataset/visualizations/matches_interactive")
+    output_dir = dataset_dir / "visualizations/matches_interactive"
     images_dir = output_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
     
     # Load configuration
-    conf_path = "gluefactory/configs/superpoint_custom+superglue_homography_custom_dataset.yaml"
-    conf = OmegaConf.load(conf_path)
+    conf = OmegaConf.load(args.conf)
+    # Dynamically override the dataset path in the configuration to match CLI
+    conf.data.data_dir = args.dataset
     data_conf = conf.data
     
     # Initialize dataset
@@ -1230,7 +1240,8 @@ def main():
 </body>
 </html>"""
     with open(output_html_path, "w", encoding="utf-8") as f:
-        f.write(html_content)
+        # Dynamically replace path prefix in HTML file
+        f.write(html_content.replace("data/custom_dataset/images/", f"data/{args.dataset}/images/"))
     print(f"HTML dashboard saved to {output_html_path}")
 
 if __name__ == "__main__":
