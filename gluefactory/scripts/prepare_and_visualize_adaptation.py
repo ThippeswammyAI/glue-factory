@@ -26,12 +26,15 @@ thread_local = threading.local()
 def get_thread_model(args, device):
     if not hasattr(thread_local, "model"):
         logger.info(f"Instantiating thread-local SuperPoint model on thread {threading.current_thread().name}...")
-        thread_local.model = get_model("superpoint_open")({
+        model_conf = {
             "nms_radius": args.nms,
             "max_num_keypoints": 2048,
             "detection_threshold": 0.0,
             "trainable": False
-        }).to(device).eval()
+        }
+        if hasattr(args, "weights") and args.weights:
+            model_conf["weights"] = args.weights
+        thread_local.model = get_model("superpoint_open")(model_conf).to(device).eval()
     return thread_local.model
 
 
@@ -844,6 +847,7 @@ def main():
     parser.add_argument("--num_threads", type=int, default=4, help="Number of parallel thread workers for image dataset processing.")
     parser.add_argument("--dataset", type=str, default="custom_dataset1", help="Name of the dataset directory under data/")
     parser.add_argument("--image_list_modality", type=str, default="reflectivity", choices=MODALITIES, help="Modality directory prefix for custom_image_list.txt")
+    parser.add_argument("--weights", type=str, default=None, help="Path to custom SuperPoint model weights")
     args = parser.parse_args()
     
     dataset_dir = DATA_PATH / args.dataset
