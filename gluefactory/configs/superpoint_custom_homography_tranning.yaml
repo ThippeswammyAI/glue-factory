@@ -16,27 +16,27 @@ data:
     load_features:
         do: True
         path: "output/dataset/exports/pseudo_labels.h5"
-        collate: False
+        collate: True
         max_num_keypoints: 512
-        force_num_keypoints: True
+        force_num_keypoints: False
 model:
     name: two_view_pipeline
     extractor:
         name: extractors.superpoint_open
         max_num_keypoints: 512
-        force_num_keypoints: True
+        force_num_keypoints: False
         detection_threshold: -1
         nms_radius: 4
         trainable: True
         lambda_d: 1.0
-        dense_outputs: True
+        dense_outputs: False
     ground_truth:
         name: null
     matcher:
         name: null
 train:
     seed: 0
-    epochs: 1000
+    epochs: 200
     log_every_iter: 1
     eval_every_iter: 10
     lr: 1e-4
