@@ -118,7 +118,16 @@ python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
     --use_gpu \
     --warp_mode            3d
 
-# --- With custom-trained SuperPoint weights ---
+# --- dataset (output/dataset) ---
+python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
+    --dataset              output/dataset \
+    --image_list_modality  reflectivity \
+    --num_warps            14 \
+    --num_threads          8 \
+    --use_gpu \
+    --warp_mode            3d
+
+# --- With custom-trained SuperPoint weights &  dataset (output/dataset) ---
 python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
     --dataset              output/dataset \
     --weights              outputs/training/superpoint_custom_run/checkpoint_best.tar \
@@ -287,6 +296,97 @@ python3 -m gluefactory.train superpoint_custom_run \
 
 ---
 
+## 4e. SuperPoint Inference (after training)
+
+Two complementary tools exist for running inference with a trained SuperPoint checkpoint.
+
+### Visualise Keypoints on Images  (`scripts/visualize_custom.py`)
+
+Runs the trained model on every image in a dataset directory and saves
+per-image detection plots **and** a 2×3 collage. Uses `data/<dataset>/images/<modality>/`.
+
+```bash
+# CLI args (from scripts/visualize_custom.py argparse)
+#   --checkpoint   path to .tar checkpoint   (default: outputs/training/superpoint_custom_run/checkpoint_best.tar)
+#   --dataset      name under data/           (default: output/sample_data)
+#   --modality     sub-folder name            (default: reflectivity)
+
+# --- Sample dataset, reflectivity ---
+python3 scripts/visualize_custom.py \
+    --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --dataset    output/sample_data \
+    --modality   reflectivity
+# Outputs → data/output/sample_data/visualizations/custom_detections/
+#            ├── <stem>_detections.png  (one per image)
+#            └── collage.png           (first 6 images)
+
+# --- Full dataset ---
+python3 scripts/visualize_custom.py \
+    --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --dataset    output/dataset \
+    --modality   reflectivity
+# Outputs → data/output/dataset/visualizations/custom_detections/
+
+# --- Different modality (near-IR) ---
+python3 scripts/visualize_custom.py \
+    --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --dataset    output/dataset \
+    --modality   nearir
+```
+
+> **How it loads weights:** The script reads `checkpoint["model"]` and strips the
+> `extractor.` prefix automatically, so the standard training checkpoint works directly.
+
+### Export Keypoints + Descriptors to H5  (`gluefactory/scripts/export_local_features.py`)
+
+Batch-exports keypoints, descriptors, and scores for every image into an HDF5 file.
+The checkpoint and model config come from the **`configs` dict inside the script**.
+To change the checkpoint path edit `configs["sp_custom"]["conf"]["weights"]` in the file.
+
+```bash
+# CLI (from argparse — dataset is POSITIONAL, no --dataset flag)
+#   <dataset>       name under data/           (positional, required)
+#   --method        sp | sp_custom | sift | disk  (default: sp)
+#   --export_prefix optional string prefix for the output filename
+#   --num_workers   dataloader workers
+
+# Current sp_custom config (check export_local_features.py to confirm):
+#   weights:              outputs/training/superpoint_custom_run_0_force_true/checkpoint_best.tar
+#   nms_radius:           6
+#   max_num_keypoints:    2048
+#   detection_threshold:  0.01
+
+# --- Export custom SP features from full dataset ---
+# Output: data/exports/custom_SP-k2048-nms4.h5
+python3 -m gluefactory.scripts.export_local_features output/dataset \
+    --method      sp_custom \
+    --num_workers 8
+
+# --- Export official SP features (for baseline comparison) ---
+# Output: data/exports/r1600_SP-k2048-nms3.h5
+python3 -m gluefactory.scripts.export_local_features output/dataset \
+    --method      sp \
+    --num_workers 8
+
+# --- Copy the output to where the training YAML expects it ---
+mkdir -p data/output/dataset/exports
+cp data/exports/custom_SP-k2048-nms4.h5 \
+   data/output/dataset/exports/custom_SP-k2048-nms4.h5
+
+# Inspect the result
+python3 -c "
+import h5py
+f = h5py.File('data/exports/custom_SP-k2048-nms4.h5', 'r')
+keys = list(f.keys())
+print(f'Entries: {len(keys)}')
+print('First key:', keys[0])
+for n, ds in f[keys[0]].items():
+    print(f'  {n}: {ds.shape} {ds.dtype}')
+"
+```
+
+---
+
 ## 5. Prepare SuperGlue Dataset (from trained SuperPoint)
 
 SuperGlue requires a feature `.h5` with keypoints **and descriptors** from a fixed
@@ -294,21 +394,22 @@ SuperPoint checkpoint — it does **not** re-run the extractor at training time.
 
 ### 5a — Export SuperGlue-Ready Features
 
-Same as §3b but targeting the correct keypoint budget for SuperGlue (512 kpts):
+Same as §4e export but the result is the input to SuperGlue training:
 
 ```bash
-# The sp_custom method writes: data/exports/custom_SP-k2048-nms4.h5
-# (checkpoint path hardcoded in export_local_features.py → configs["sp_custom"])
+# dataset is a POSITIONAL argument (no --dataset flag)
+# output: data/exports/custom_SP-k2048-nms4.h5
 python3 -m gluefactory.scripts.export_local_features output/dataset \
     --method      sp_custom \
     --num_workers 8
 
-# The .yaml configs reference this file as:
-#   load_features.path: "output/dataset/exports/custom_SP-k2048-nms4.h5"
-# Make sure to copy or symlink if paths differ:
+# Copy to where the YAML expects it:
 mkdir -p data/output/dataset/exports
 cp data/exports/custom_SP-k2048-nms4.h5 \
    data/output/dataset/exports/custom_SP-k2048-nms4.h5
+
+# YAML reference (superpoint_custom+superglue_homography.yaml):
+#   load_features.path: "output/dataset/exports/custom_SP-k2048-nms4.h5"
 ```
 
 ### 5b — Build Consensus Feature Cache (Adaptation with custom SP weights)
