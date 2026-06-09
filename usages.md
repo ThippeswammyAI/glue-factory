@@ -44,7 +44,7 @@ tensorboard --logdir outputs/training/
 To evaluate your custom SuperPoint model using Nearest Neighbor (NN) matching on HPatches:
 ```bash
 python3 -m gluefactory.eval.hpatches \
-  --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
+  --checkpoint outputs/training/superpoint_custom+superglue_homography_custom_dataset/checkpoint_best.tar \
   --conf superpoint-open+NN \
   --overwrite
 ```
