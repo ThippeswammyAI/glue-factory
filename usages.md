@@ -57,113 +57,163 @@ data/output/dataset/
     └── pseudo_labels.h5    ← generated in step 2b
 ```
 
-### 2a — Generate the Image List
+### 2a — Generate the Image List (manual, already done)
 
-Run from the **workspace root** (`glue-factory/`).  
-Generates `data/output/dataset/custom_image_list.txt` listing every reflectivity frame
-(relative paths from `images/`):
+The image list was generated with:
 
 ```bash
-# List all reflectivity PNGs relative to the images/ directory
+# Lists all reflectivity PNGs relative to images/ and writes custom_image_list.txt
 find data/output/dataset/images/reflectivity -type f -name "*.png" \
   | sed 's|data/output/dataset/images/||' \
   | sort \
   > data/output/dataset/custom_image_list.txt
 
-# Verify
+# Verify (should be 344 lines)
 wc -l data/output/dataset/custom_image_list.txt
 head -5  data/output/dataset/custom_image_list.txt
 ```
 
-> **Tip:** To include *all four* modalities in the list (for multimodal adaptation),
-> replace `reflectivity` with `*` in the `find` pattern.
+> **Note:** The adaptation script (step 2b) will **also auto-write** this list — so you
+> only need the `find` command if you want to regenerate it independently.
 
 ### 2b — Joint Multimodal Homographic Adaptation (generate pseudo-labels)
 
-This step runs **Homographic Adaptation** across all four pixel-aligned modalities using
-the official (or custom-trained) SuperPoint to produce consensus pseudo-ground-truth
-keypoints, and saves them into an HDF5 cache.
+**Script:** `gluefactory/scripts/prepare_and_visualize_adaptation.py`
+
+The script's `--dataset` is a **name relative to `data/`** (i.e., `DATA_PATH`).  
+It auto-discovers images from `data/<dataset>/images/nearir/`, writes
+`data/<dataset>/exports/pseudo_labels.h5`, and auto-generates `custom_image_list.txt`.
 
 ```bash
-# Full-GPU multimodal adaptation — writes data/output/dataset/exports/pseudo_labels.h5
-python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
-    --data_dir         data/output/dataset \
-    --image_list       data/output/dataset/custom_image_list.txt \
-    --image_list_modality reflectivity \
-    --output_h5        data/output/dataset/exports/pseudo_labels.h5 \
-    --num_warps        15 \
-    --num_threads      8 \
-    --use_gpu \
-    --warp_mode        3d
+# Actual CLI args (from argparse in the script):
+#   --dataset           name under data/          (default: custom_dataset1)
+#   --num_warps         warps per modality         (default: 200)
+#   --thresh            keypoint threshold         (default: 0.02)
+#   --nms               NMS radius                 (default: 5)
+#   --warp_mode         2d | 3d                    (default: 3d)
+#   --camera_info       path to camera.info        (default: plan/camera.info)
+#   --num_threads       parallel workers           (default: 4)
+#   --image_list_modality  nearir|range|reflectivity|signal (default: reflectivity)
+#   --weights           custom SP checkpoint (optional)
+#   --use_gpu / --no_gpu
+#   --save_detailed_warps   save per-warp side-by-side plots
 
-# Quick sanity-check — print the first 5 keys in the HDF5 file
+# --- Full custom dataset (output/dataset) ---
+python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
+    --dataset              output/dataset \
+    --image_list_modality  reflectivity \
+    --num_warps            14 \
+    --num_threads          14 \
+    --use_gpu \
+    --warp_mode            3d
+# Output H5 → data/output/dataset/exports/pseudo_labels.h5
+# Image list → data/output/dataset/custom_image_list.txt
+
+# --- Small sample dataset (output/sample_data) ---
+python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
+    --dataset              output/sample_data \
+    --image_list_modality  reflectivity \
+    --num_warps            14 \
+    --num_threads          8 \
+    --use_gpu \
+    --warp_mode            3d
+
+# --- With custom-trained SuperPoint weights ---
+python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
+    --dataset              output/dataset \
+    --weights              outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --image_list_modality  reflectivity \
+    --num_warps            14 \
+    --num_threads          14 \
+    --use_gpu \
+    --warp_mode            3d
+```
+
+> **Camera intrinsics:** For `--warp_mode 3d` the script reads `plan/camera.info`
+> (default path). If it doesn't exist, use `--camera_info <path>` or fall back to
+> `--warp_mode 2d`.
+
+Sanity-check the output:
+```bash
 python3 -c "
 import h5py
 f = h5py.File('data/output/dataset/exports/pseudo_labels.h5', 'r')
-print('Keys:', list(f.keys())[:5])
-print('Keypoints shape for first key:', f[list(f.keys())[0]]['keypoints'].shape)
+keys = list(f.keys())
+print(f'Total scenes: {len(keys)}')
+print('Sample key:', keys[0])
+k0 = keys[0]
+print('  keypoints:', f[k0]['keypoints'].shape)
+print('  scores:   ', f[k0]['keypoint_scores'].shape)
 "
-```
-
-> **Note:** For the **small sample dataset** (`data/output/sample_data/`) the same
-> commands apply — just replace `data/output/dataset` with `data/output/sample_data`.
-> The sample exports already exist at
-> `data/output/sample_data/exports/pseudo_labels.h5`.
 
 ---
 
 ## 3. Export SuperPoint Feature Cache (.h5)
 
-After training (or using the official Magic Leap weights), re-export clean descriptors
-and keypoints from your images into a new HDF5 file.  This `.h5` is then fed to
-SuperGlue training via `load_features`.
+Use `gluefactory/scripts/export_local_features.py` to export keypoints + descriptors.
 
-### 3a — Using the Official (pre-trained) SuperPoint Weights
+**CLI** (from script source):
+```
+python3 -m gluefactory.scripts.export_local_features <dataset> [--method sp|sp_custom|sift|disk] [--num_workers N]
+```
+- `<dataset>` = name under `data/`  →  e.g. `output/dataset`
+- Reads `data/<dataset>/custom_image_list.txt` automatically when present
+- Output: `data/exports/<method_name>.h5`
+
+### 3a — Official SuperPoint (`--method sp`)
 
 ```bash
-# Export features from the full dataset using the official SuperPoint
-python3 -m gluefactory.scripts.export_features \
-    --conf        superpoint-open+NN \
-    --image_dir   data/output/dataset/images \
-    --image_list  data/output/dataset/custom_image_list.txt \
-    --export_dir  data/output/dataset/exports \
-    --output_name custom_SP-official-k2048-nms4.h5 \
-    --max_num_keypoints 2048 \
-    --nms_radius  4
-
-# Verify
-python3 -c "
-import h5py
-f = h5py.File('data/output/dataset/exports/custom_SP-official-k2048-nms4.h5', 'r')
-keys = list(f.keys())
-print(f'Total images: {len(keys)}')
-print('Sample key:', keys[0])
-print('keypoints:', f[keys[0]]['keypoints'].shape)
-print('descriptors:', f[keys[0]]['descriptors'].shape)
-"
+# output: data/exports/r1600_SP-k2048-nms3.h5
+python3 -m gluefactory.scripts.export_local_features output/dataset \
+    --method      sp \
+    --num_workers 8
 ```
 
-### 3b — Using Your Custom-Trained SuperPoint Weights
+### 3b — Custom-Trained SuperPoint (`--method sp_custom`)
+
+The `sp_custom` config in the script hardcodes:
+- weights: `outputs/training/superpoint_custom_run/checkpoint_best.tar`
+- nms_radius=4, max_num_keypoints=2048, detection_threshold=0.005, **no resize**
 
 ```bash
-# Export features using the best checkpoint from your custom SuperPoint run
-python3 -m gluefactory.scripts.export_features \
-    --conf        superpoint-open+NN \
-    --checkpoint  outputs/training/superpoint_custom_run/checkpoint_best.tar \
-    --image_dir   data/output/dataset/images \
-    --image_list  data/output/dataset/custom_image_list.txt \
-    --export_dir  data/output/dataset/exports \
-    --output_name custom_SP-k2048-nms4.h5 \
-    --max_num_keypoints 2048 \
-    --nms_radius  4
+# output: data/exports/custom_SP-k2048-nms4.h5
+python3 -m gluefactory.scripts.export_local_features output/dataset \
+    --method      sp_custom \
+    --num_workers 8
+```
 
-# Optional — boost scores if match precision is too low
+### 3c — Extract Descriptors at Consensus Keypoints (SuperGlue prep)
+
+Use `gluefactory/scripts/export_consensus_features.py`:
+
+```bash
+# CLI args: --dataset, --pseudo_labels_h5, --weights, --output_h5, --modality
+python3 -m gluefactory.scripts.export_consensus_features \
+    --dataset          output/dataset \
+    --pseudo_labels_h5 data/output/dataset/exports/pseudo_labels.h5 \
+    --weights          outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --output_h5        data/output/dataset/exports/custom_dataset_consensus_SP.h5 \
+    --modality         reflectivity
+```
+
+### Inspect any H5 file
+
+```bash
+python3 -c "
+import h5py, sys
+f = h5py.File(sys.argv[1], 'r')
+keys = list(f.keys())
+print(f'Total entries: {len(keys)},  first key: {keys[0]}')
+grp = f[keys[0]]
+for name, ds in grp.items():
+    print(f'  {name}: {ds.shape} {ds.dtype}')
+" data/output/dataset/exports/custom_SP-k2048-nms4.h5
+
+# Post-processing helpers
 python3 scripts/boost_h5_scores.py \
-    --input   data/output/dataset/exports/custom_SP-k2048-nms4.h5 \
-    --output  data/output/dataset/exports/custom_SP-k2048-nms4-boosted.h5 \
-    --scale   2.0
+    --input  data/output/dataset/exports/custom_SP-k2048-nms4.h5 \
+    --output data/output/dataset/exports/custom_SP-k2048-nms4-boosted.h5 --scale 2.0
 
-# Optional — filter out low-confidence keypoints
 python3 scripts/filter_h5_file.py \
     --input     data/output/dataset/exports/custom_SP-k2048-nms4.h5 \
     --output    data/output/dataset/exports/custom_SP-k2048-nms4-filtered.h5 \
@@ -244,58 +294,67 @@ SuperPoint checkpoint — it does **not** re-run the extractor at training time.
 
 ### 5a — Export SuperGlue-Ready Features
 
+Same as §3b but targeting the correct keypoint budget for SuperGlue (512 kpts):
+
 ```bash
-# Generate the h5 used in superpoint_custom+superglue_homography.yaml
-python3 -m gluefactory.scripts.export_features \
-    --conf        superpoint-open+NN \
-    --checkpoint  outputs/training/superpoint_custom_run/checkpoint_best.tar \
-    --image_dir   data/output/dataset/images \
-    --image_list  data/output/dataset/custom_image_list.txt \
-    --export_dir  data/output/dataset/exports \
-    --output_name custom_SP-k2048-nms4.h5 \
-    --max_num_keypoints 512 \
-    --nms_radius  4 \
-    --detection_threshold 0.005
+# The sp_custom method writes: data/exports/custom_SP-k2048-nms4.h5
+# (checkpoint path hardcoded in export_local_features.py → configs["sp_custom"])
+python3 -m gluefactory.scripts.export_local_features output/dataset \
+    --method      sp_custom \
+    --num_workers 8
+
+# The .yaml configs reference this file as:
+#   load_features.path: "output/dataset/exports/custom_SP-k2048-nms4.h5"
+# Make sure to copy or symlink if paths differ:
+mkdir -p data/output/dataset/exports
+cp data/exports/custom_SP-k2048-nms4.h5 \
+   data/output/dataset/exports/custom_SP-k2048-nms4.h5
 ```
 
-### 5b — Build Consensus Feature Cache (Homographic Adaptation with custom SP)
+### 5b — Build Consensus Feature Cache (Adaptation with custom SP weights)
 
-For the highest-quality SuperGlue training targets, re-run homographic adaptation
-**with your trained SuperPoint** checkpoint:
+Re-run homographic adaptation using your **trained SuperPoint** checkpoint to get
+the highest-quality SuperGlue training targets. Use `--weights` to load the checkpoint:
 
 ```bash
+# Step 1 — re-run adaptation with trained SP; writes pseudo_labels.h5 and image list
 python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
-    --data_dir         data/output/dataset \
-    --image_list       data/output/dataset/custom_image_list.txt \
-    --image_list_modality reflectivity \
-    --checkpoint       outputs/training/superpoint_custom_run/checkpoint_best.tar \
-    --output_h5        data/output/dataset/exports/custom_dataset_consensus_SP.h5 \
-    --num_warps        15 \
-    --num_threads      8 \
+    --dataset              output/dataset \
+    --weights              outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --image_list_modality  reflectivity \
+    --num_warps            14 \
+    --num_threads          14 \
     --use_gpu \
-    --warp_mode        3d
+    --warp_mode            3d
+# Output H5   → data/output/dataset/exports/pseudo_labels.h5  (overwritten)
+# Image list  → data/output/dataset/custom_image_list.txt  (auto-written)
 
-# Inspect result
+# Step 2 — attach descriptors to those consensus keypoints
+python3 -m gluefactory.scripts.export_consensus_features \
+    --dataset          output/dataset \
+    --pseudo_labels_h5 data/output/dataset/exports/pseudo_labels.h5 \
+    --weights          outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --output_h5        data/output/dataset/exports/custom_dataset_consensus_SP.h5 \
+    --modality         reflectivity
+```
+
+### 5c — Verify the SuperGlue H5 and Image List
+
+```bash
+# Check image list (auto-written by the adaptation script)
+wc -l data/output/dataset/custom_image_list.txt
+head -3  data/output/dataset/custom_image_list.txt
+
+# Inspect the consensus H5
 python3 -c "
 import h5py
 f = h5py.File('data/output/dataset/exports/custom_dataset_consensus_SP.h5', 'r')
-print('Keys:', len(list(f.keys())))
-k0 = list(f.keys())[0]
-print('keypoints:', f[k0]['keypoints'].shape)
-print('descriptors:', f[k0]['descriptors'].shape)
-print('scores:', f[k0]['keypoint_scores'].shape)
+keys = list(f.keys())
+print(f'Keys: {len(keys)}')
+k0 = keys[0]
+for n, ds in f[k0].items():
+    print(f'  {n}: {ds.shape}')
 "
-```
-
-### 5c — Generate the SuperGlue Image List
-
-The `homographies` dataloader needs an image list relative to `images/`:
-
-```bash
-find data/output/dataset/images/reflectivity -type f -name "*.png" \
-  | sed 's|data/output/dataset/images/||' \
-  | sort \
-  > data/output/dataset/custom_image_list.txt
 ```
 
 ---
