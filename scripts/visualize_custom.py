@@ -8,6 +8,11 @@ import torch
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
 from gluefactory.models import get_model
 from gluefactory.settings import DATA_PATH
 
