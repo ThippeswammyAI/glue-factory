@@ -633,6 +633,11 @@ python3 scripts/visualize_custom.py \
     --image_dir  data/output/dataset/images/reflectivity \
     --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
     --output_dir data/output/visualizations/keypoints
+
+python3 scripts/visualize_custom.py \
+    --dataset output/dataset \
+    --modality reflectivity \
+    --checkpoint outputs/training/superpoint_custom_run_0_force_true/checkpoint_best.tar
 ```
 
 ### Generate Interactive Match Dashboard
