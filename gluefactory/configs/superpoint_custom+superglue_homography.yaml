@@ -34,7 +34,7 @@ model:
         filter_threshold: 0.2
 train:
     seed: 0
-    epochs: 1000
+    epochs: 100
     log_every_iter: 1
     eval_every_iter: 10
     lr: 1e-4
