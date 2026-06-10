@@ -16,10 +16,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("superglue_inference")
 
 # Default paths
-DEFAULT_SUPERGLUE_CKPT = "outputs/training/superglue_custom_run/checkpoint_best.tar"
-DEFAULT_SUPERPOINT_CKPT = "outputs/training/superpoint_custom_run/checkpoint_best.tar"
-DEFAULT_INPUT_DIR = "data/custom_dataset/images/reflectivity"
-DEFAULT_OUTPUT_DIR = "data/outputs/superglue_inference"
+DEFAULT_SUPERGLUE_CKPT = "/home/thippe/workspaces/AiMl/glue-factory/outputs/training/superglue_slam_run/checkpoint_best.tar"
+DEFAULT_SUPERPOINT_CKPT = "outputs/training/superpoint_custom_run_0_force_true/checkpoint_best.tar"
+DEFAULT_INPUT_DIR = "data/output/sample_data/images/reflectivity"
+DEFAULT_OUTPUT_DIR = "data/output/sample_data/visualizations/superglue_inference"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Test SuperGlue model inference on image pairs.")

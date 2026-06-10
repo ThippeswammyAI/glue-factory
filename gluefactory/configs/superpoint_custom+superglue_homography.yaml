@@ -1,10 +1,10 @@
 data:
     name: homographies
-    data_dir: custom_dataset1
+    data_dir: output/dataset
     image_dir: images
     image_list: custom_image_list.txt
-    train_size: 64
-    val_size: 16
+    train_size: 300
+    val_size: 44
     batch_size: 4
     num_workers: 4
     homography:
@@ -15,7 +15,7 @@ data:
         name: lg
     load_features:
         do: True
-        path: "exports/custom_SP-k2048-nms4.h5"
+        path: "output/dataset/exports/custom_SP-k2048-nms4.h5"
         collate: False
         max_num_keypoints: 512
         force_num_keypoints: True
@@ -34,7 +34,7 @@ model:
         filter_threshold: 0.2
 train:
     seed: 0
-    epochs: 1000
+    epochs: 100
     log_every_iter: 1
     eval_every_iter: 10
     lr: 1e-4

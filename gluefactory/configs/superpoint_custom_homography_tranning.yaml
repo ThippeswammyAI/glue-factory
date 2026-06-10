@@ -1,10 +1,10 @@
 data:
     name: homographies
-    data_dir: custom_dataset1
+    data_dir: output/dataset
     image_dir: images
     image_list: custom_image_list.txt
-    train_size: 64
-    val_size: 16
+    train_size: 300
+    val_size: 44
     batch_size: 4
     num_workers: 16
     homography:
@@ -15,8 +15,8 @@ data:
         name: lg
     load_features:
         do: True
-        path: "custom_dataset1/exports/pseudo_labels.h5"
-        collate: False
+        path: "output/dataset/exports/pseudo_labels.h5"
+        collate: True
         max_num_keypoints: 512
         force_num_keypoints: True
 model:
@@ -36,7 +36,7 @@ model:
         name: null
 train:
     seed: 0
-    epochs: 1000
+    epochs: 200
     log_every_iter: 1
     eval_every_iter: 10
     lr: 1e-4

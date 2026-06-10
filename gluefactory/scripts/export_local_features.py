@@ -34,10 +34,10 @@ configs = {
         "gray": True,
         "conf": {
             "name": "extractors.superpoint_open",
-            "weights": "outputs/training/superpoint_custom_run/checkpoint_best.tar",
-            "nms_radius": 4,
+            "weights": "outputs/training/superpoint_custom_run_0_force_true/checkpoint_best.tar",
+            "nms_radius": 6,
             "max_num_keypoints": n_kpts,
-            "detection_threshold": 0.005,
+            "detection_threshold": 0.01,
         },
     },
     "sift": {

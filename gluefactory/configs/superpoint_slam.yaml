@@ -1,0 +1,48 @@
+data:
+  name: slam_posed_images
+  data_dir: output/slam
+  scene: slam_scene
+  image_dir: images/rgb
+  depth_dir: images/depth
+  depth_format: png
+  train_size: 1400
+  val_size: 282
+  batch_size: 4
+  num_workers: 14
+  preprocessing:
+    resize: 512
+    side: long
+  load_features:
+    do: True
+    path: output/slam/exports/pseudo_labels_slam.h5
+    padding_length: 512
+    padding_fn: pad_local_features
+
+model:
+  name: two_view_pipeline
+  extractor:
+    name: extractors.superpoint_open
+    max_num_keypoints: 512
+    force_num_keypoints: True
+    detection_threshold: -1
+    nms_radius: 4
+    trainable: True
+    lambda_d: 1.0
+    dense_outputs: True
+  ground_truth:
+    name: null
+  matcher:
+    name: null
+
+train:
+  seed: 42
+  epochs: 200
+  lr: 1e-4
+  log_every_iter: 10
+  eval_every_iter: 100
+  lr_schedule:
+    type: exp
+    start: 20
+    on_epoch: true
+    exp_div_10: 10
+  plot: [5, 'gluefactory.visualization.visualize_batch.make_keypoint_figures']
