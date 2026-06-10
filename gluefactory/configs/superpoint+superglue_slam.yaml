@@ -1,0 +1,63 @@
+data:
+  name: slam_posed_images
+  root: output/sample_slam
+  scene: slam_scene
+  image_dir: images/rgb
+  depth_dir: images/depth
+  depth_format: png
+  pairs_train: pairs_train.txt
+  pairs_val: pairs_val.txt
+  batch_size: 8
+  num_workers: 2
+  preprocessing:
+    resize: 512
+    side: long
+  load_features:
+    do: True
+    path: exports/sp_features_slam.h5
+    max_num_keypoints: 512
+    force_num_keypoints: True
+
+model:
+  name: two_view_pipeline
+  extractor:
+    name: extractors.superpoint_open
+    max_num_keypoints: 512
+    force_num_keypoints: True
+    detection_threshold: -1
+    nms_radius: 4
+    trainable: False
+  ground_truth:
+    name: matchers.depth_matcher
+    th_positive: 3
+    th_negative: 5
+    th_epi: 5
+  matcher:
+    name: matchers.superglue
+    descriptor_dim: 256
+    weights: indoor
+    sinkhorn_iterations: 100
+    match_threshold: 0.2
+
+train:
+  seed: 42
+  epochs: 100
+  optimizer: adam
+  lr: 1e-4
+  log_every_iter: 10
+  eval_every_iter: 100
+  save_every_iter: 1000
+  lr_schedule:
+    type: exp
+    start: 20
+    on_epoch: true
+    exp_div_10: 10
+  plot:
+    - 5
+    - gluefactory.visualization.visualize_batch.make_match_figures
+
+benchmarks:
+  hpatches:
+    eval:
+      estimator: opencv
+      ransac_th: 0.5
