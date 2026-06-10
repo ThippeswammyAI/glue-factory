@@ -56,13 +56,13 @@ def parse_args():
     parser.add_argument(
         "--nms_radius",
         type=int,
-        default=6,
+        default=3,
         help="NMS radius for SuperPoint keypoint extraction.",
     )
     parser.add_argument(
         "--max_num_keypoints",
         type=int,
-        default=200,
+        default=512,
         help="Maximum number of keypoints to extract.",
     )
     parser.add_argument(
@@ -102,91 +102,7 @@ def load_image(path, resize_max=0):
             
     return img_bgr, img_gray
 
-def get_image_pairs(input_path, stride=1, overlapping=True):
-    path = Path(input_path)
-
-    # case: manual pair
-    if "," in str(input_path):
-        a, b = [Path(p.strip()) for p in input_path.split(",")]
-        return [(a, b)]
-
-    if not path.exists():
-        return []
-
-    img_ext = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
-
-    img_files = sorted([p for p in path.rglob("*") if p.suffix.lower() in img_ext])
-
-    if len(img_files) < 2:
-        return []
-
-    pairs = []
-
-    if overlapping:
-        for i in range(len(img_files) - stride):
-            pairs.append((img_files[i], img_files[i + stride]))
-    else:
-        for i in range(0, len(img_files) - stride, stride):
-            pairs.append((img_files[i], img_files[i + stride]))
-
-    return pairs
-
-    """
-    Generate consistent image pairs in sorted sequence order.
-
-    Args:
-        input_path (str): folder or "img1,img2"
-        stride (int): gap between paired images
-        overlapping (bool): 
-            - True  => (i, i+stride), sliding window
-            - False => non-overlapping pairs
-
-    Returns:
-        List[Tuple[Path, Path]]
-    """
-    path = Path(input_path)
-    pairs = []
-
-    # Case 1: manual pair input
-    if "," in input_path:
-        parts = [Path(p.strip()) for p in input_path.split(",")]
-        if len(parts) == 2:
-            return [(parts[0], parts[1])]
-        return []
-
-    if path.is_file():
-        logger.error("Single file provided. Expected folder or pair.")
-        return []
-
-    if not path.is_dir():
-        return []
-
-    img_extensions = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
-
-    # Collect all images recursively if needed
-    img_files = []
-    for f in path.rglob("*"):
-        if f.suffix.lower() in img_extensions:
-            img_files.append(f)
-
-    # IMPORTANT: stable ordering
-    img_files = sorted(img_files)
-
-    n = len(img_files)
-    if n < 2:
-        return []
-
-    if overlapping:
-        # sliding window pairs
-        for i in range(n - stride):
-            pairs.append((img_files[i], img_files[i + stride]))
-    else:
-        # strict sequential non-overlapping
-        for i in range(0, n - stride, stride):
-            pairs.append((img_files[i], img_files[i + stride]))
-
-    return pairs
-
+def get_image_pairs(input_path):
     """Finds image pairs to match based on input path."""
     path = Path(input_path)
     pairs = []
@@ -283,7 +199,7 @@ def main():
         return
         
     # 2. Find Image Pairs
-    pairs = get_image_pairs(args.input,stride=1, overlapping=True)
+    pairs = get_image_pairs(args.input)
     if not pairs:
         logger.error(f"No image pairs found in input: {args.input}")
         return
