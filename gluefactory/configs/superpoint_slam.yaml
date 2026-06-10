@@ -1,6 +1,6 @@
 data:
   name: slam_posed_images
-  data_dir: output/sample_slam
+  data_dir: output/slam
   scene: slam_scene
   image_dir: images/rgb
   depth_dir: images/depth
@@ -14,7 +14,7 @@ data:
     side: long
   load_features:
     do: True
-    path: output/sample_slam/exports/pseudo_labels_slam.h5
+    path: output/slam/exports/pseudo_labels_slam.h5
     padding_length: 512
     padding_fn: pad_local_features
 
