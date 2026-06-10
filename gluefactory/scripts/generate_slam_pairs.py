@@ -238,27 +238,30 @@ def main():
         
         unique_images = list(set([p[0] for p in pairs] + [p[1] for p in pairs]))
         
-        lock = threading.Lock()
         with h5py.File(h5_path, "w") as f:
             with tqdm(total=len(unique_images)) as pbar:
                 def worker(name):
                     local_model = get_thread_model(args, device)
                     kpts, scores, desc = extract_features(name, dataset_dir, local_model, device)
-                    
-                    with lock:
+                    return name, kpts, scores, desc
+                if args.num_threads > 1:
+                    with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
+                        for name, kpts, scores, desc in executor.map(worker, unique_images):
+                            if kpts is not None:
+                                grp = f.create_group(name)
+                                grp.create_dataset("keypoints", data=kpts)
+                                grp.create_dataset("keypoint_scores", data=scores)
+                                grp.create_dataset("descriptors", data=desc)
+                            pbar.update(1)
+                else:
+                    for n in unique_images:
+                        name, kpts, scores, desc = worker(n)
                         if kpts is not None:
                             grp = f.create_group(name)
                             grp.create_dataset("keypoints", data=kpts)
                             grp.create_dataset("keypoint_scores", data=scores)
                             grp.create_dataset("descriptors", data=desc)
                         pbar.update(1)
-
-                if args.num_threads > 1:
-                    with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
-                        list(executor.map(worker, unique_images))
-                else:
-                    for name in unique_images:
-                        worker(name)
 
     logger.info("Done generating pairs and features.")
 

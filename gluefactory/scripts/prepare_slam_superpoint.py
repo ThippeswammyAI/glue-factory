@@ -391,8 +391,6 @@ def main():
     output_h5 = exports_dir / "pseudo_labels_slam.h5"
     logger.info(f"Generating joint multimodal pseudo-labels and saving to {output_h5}...")
     
-    lock = threading.Lock()
-    
     with h5py.File(output_h5, "w") as f:
         with tqdm(total=len(image_names), desc="Homographic Adaptation") as pbar:
             def worker(name):
@@ -401,20 +399,22 @@ def main():
                     name, dataset_dir, local_model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
                     warp_mode=args.warp_mode, K=K, use_gpu=args.use_gpu
                 )
-                
-                with lock:
-                    grp = f.create_group(name)
-                    grp.create_dataset("keypoints", data=kpts)
-                    grp.create_dataset("keypoint_scores", data=scores)
-                    logger.debug(f"Scene {name}: Extracted {len(kpts)} keypoints.")
-                    pbar.update(1)
+                return name, kpts, scores
 
             if args.num_threads > 1:
                 with ThreadPoolExecutor(max_workers=args.num_threads) as executor:
-                    list(executor.map(worker, image_names))
+                    for name, kpts, scores in executor.map(worker, image_names):
+                        grp = f.create_group(name)
+                        grp.create_dataset("keypoints", data=kpts)
+                        grp.create_dataset("keypoint_scores", data=scores)
+                        pbar.update(1)
             else:
-                for name in image_names:
-                    worker(name)
+                for n in image_names:
+                    name, kpts, scores = worker(n)
+                    grp = f.create_group(name)
+                    grp.create_dataset("keypoints", data=kpts)
+                    grp.create_dataset("keypoint_scores", data=scores)
+                    pbar.update(1)
                     
     # Generate splits
     logger.info("Generating split files...")
