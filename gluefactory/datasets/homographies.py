@@ -261,6 +261,11 @@ class _Dataset(torch.utils.data.Dataset):
         data["scales"] = np.array([1.0, 1.0], dtype=np.float32)
         if self.conf.load_features.do:
             features = self.feature_loader({k: [v] for k, v in data.items()})
+            features = {
+                k: v[0] if isinstance(v, (torch.Tensor, np.ndarray, list)) else v 
+                for k, v in features.items()
+            }
+
             features = self._transform_keypoints(features, data)
             data["cache"] = features
 
