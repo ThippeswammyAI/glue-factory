@@ -140,7 +140,7 @@ def main():
     parser.add_argument("--sp_weights", type=str, default=None)
     parser.add_argument("--nms_radius", type=int, default=3)
     parser.add_argument("--max_keypoints", type=int, default=512)
-    parser.add_argument("--num_threads", type=int, default=4)
+    parser.add_argument("--num_threads", type=int, default=14)
     args = parser.parse_args()
     
     dataset_dir = Path(args.data_dir)

@@ -349,7 +349,7 @@ def main():
     parser.add_argument("--max_keypoints", type=int, default=512, help="Max keypoints")
     parser.add_argument("--warp_mode", type=str, default="3d", choices=["2d", "3d"], help="Warp mode")
     parser.add_argument("--use_gpu", action="store_true", default=True)
-    parser.add_argument("--num_threads", type=int, default=4)
+    parser.add_argument("--num_threads", type=int, default=14)
     parser.add_argument("--split_ratio", type=float, default=0.83)
     parser.add_argument("--weights", type=str, default=None)
     args = parser.parse_args()
