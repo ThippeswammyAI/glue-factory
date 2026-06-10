@@ -1,39 +1,37 @@
 data:
   name: slam_posed_images
-  root: output/sample_slam
+  data_dir: output/sample_slam
   scene: slam_scene
   image_dir: images/rgb
   depth_dir: images/depth
   depth_format: png
   pairs_train: pairs_train.txt
   pairs_val: pairs_val.txt
-  batch_size: 8
-  num_workers: 2
+  train_size: 1400
+  val_size: 282
+  batch_size: 4
+  num_workers: 14
   preprocessing:
     resize: 512
     side: long
   load_features:
     do: True
-    path: exports/sp_features_slam.h5
-    max_num_keypoints: 512
-    force_num_keypoints: True
+    path: output/sample_slam/exports/sp_features_slam.h5
+    padding_length: 512
+    padding_fn: pad_local_features
 
 model:
   name: two_view_pipeline
   extractor:
-    name: extractors.superpoint_open
-    max_num_keypoints: 512
-    force_num_keypoints: True
-    detection_threshold: -1
-    nms_radius: 4
-    trainable: False
+    name: null
+  allow_no_extract: True
   ground_truth:
     name: matchers.depth_matcher
     th_positive: 3
     th_negative: 5
     th_epi: 5
   matcher:
-    name: matchers.superglue
+    name: gluefactory_nonfree.superglue
     descriptor_dim: 256
     weights: indoor
     sinkhorn_iterations: 100
@@ -41,7 +39,7 @@ model:
 
 train:
   seed: 42
-  epochs: 100
+  epochs: 200
   optimizer: adam
   lr: 1e-4
   log_every_iter: 10

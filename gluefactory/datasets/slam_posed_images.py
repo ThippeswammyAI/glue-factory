@@ -23,6 +23,8 @@ class SlamPosedDataset(BaseDataset):
     default_conf = {
         "data_dir": "output/slam",
         "scene": "slam_scene",
+        "train_size": "???",
+        "val_size": "???",
         "pose_file": "poses_odom_RGBD_slam.txt",
         "calib_dir": "images/calib",
         "image_dir": "images/rgb",
@@ -85,11 +87,11 @@ class _SlamPairDataset(torch.utils.data.Dataset):
                 # R_cw = R_wc^T, t_cw = -R_wc^T * t_wc
                 R_cw = rot.T
                 t_cw = -R_cw @ t
-                T_cw = np.eye(4)
+                T_cw = np.eye(4, dtype=np.float32)
                 T_cw[:3, :3] = R_cw
                 T_cw[:3, 3] = t_cw
                 
-                self.poses_w2c[ts] = Pose.from_4x4mat(T_cw)
+                self.poses_w2c[ts] = Pose.from_4x4mat(T_cw).float()
                 
         # Parse camera calibration
         self.K = None
@@ -160,7 +162,7 @@ class _SlamPairDataset(torch.utils.data.Dataset):
                     depth = torch.from_numpy(depth_m).unsqueeze(0)
                 
         # pose
-        T_w2cam = self.poses_w2c.get(ts, Pose.from_4x4mat(np.eye(4)))
+        T_w2cam = self.poses_w2c.get(ts, Pose.from_4x4mat(np.eye(4, dtype=np.float32)).float())
         
         data = self.preprocessor(img)
         if depth is not None:
