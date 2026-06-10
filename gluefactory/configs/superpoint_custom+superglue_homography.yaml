@@ -3,8 +3,8 @@ data:
     data_dir: output/dataset
     image_dir: images
     image_list: custom_image_list.txt
-    train_size: 64
-    val_size: 16
+    train_size: 300
+    val_size: 44
     batch_size: 4
     num_workers: 4
     homography:

@@ -3,8 +3,8 @@ data:
     data_dir: output/dataset
     image_dir: images
     image_list: custom_image_list.txt
-    train_size: 64
-    val_size: 16
+    train_size: 300
+    val_size: 44
     batch_size: 4
     num_workers: 16
     homography:
@@ -18,18 +18,18 @@ data:
         path: "output/dataset/exports/pseudo_labels.h5"
         collate: True
         max_num_keypoints: 512
-        force_num_keypoints: False
+        force_num_keypoints: True
 model:
     name: two_view_pipeline
     extractor:
         name: extractors.superpoint_open
         max_num_keypoints: 512
-        force_num_keypoints: False
+        force_num_keypoints: True
         detection_threshold: -1
         nms_radius: 4
         trainable: True
         lambda_d: 1.0
-        dense_outputs: False
+        dense_outputs: True
     ground_truth:
         name: null
     matcher:
