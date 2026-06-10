@@ -118,14 +118,6 @@ python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
     --use_gpu \
     --warp_mode            3d
 
-# --- dataset (output/dataset) ---
-python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
-    --dataset              output/dataset \
-    --image_list_modality  reflectivity \
-    --num_warps            14 \
-    --num_threads          8 \
-    --use_gpu \
-    --warp_mode            3d
 
 # --- With custom-trained SuperPoint weights &  dataset (output/dataset) ---
 python3 -m gluefactory.scripts.prepare_and_visualize_adaptation \
