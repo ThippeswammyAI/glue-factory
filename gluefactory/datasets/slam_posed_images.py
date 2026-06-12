@@ -173,7 +173,7 @@ class _SlamPairDataset(torch.utils.data.Dataset):
             "scene": self.scene,
             "T_w2cam": T_w2cam,
             "depth": depth,
-            "camera": self.camera,
+            "camera": self.camera.scale(data["scales"]),
             **data,
         }
         
