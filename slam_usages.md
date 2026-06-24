@@ -77,17 +77,26 @@ data/output/sample_slam/
 Generate ground-truth keypoint pseudo-labels by applying homographic and 3D projective adaptation to your SLAM frames.
 
 ```bash
-# --- On Sample Dataset (quick test) ---
+# --- On Sample Dataset (quick test with 40:60 hybrid adaptation) ---
 python3 -m gluefactory.scripts.prepare_slam_superpoint \
     --data_dir data/output/sample_slam \
-    --num_warps 50
+    --num_warps 50 \
+    --pose_ratio 0.6
 
-# --- On Full Dataset ---
+# --- On Full Dataset (with 40:60 hybrid adaptation) ---
 python3 -m gluefactory.scripts.prepare_slam_superpoint \
     --data_dir data/output/slam \
-    --num_warps 50
+    --num_warps 50 \
+    --pose_ratio 0.6
 ```
 *   **Input**: RGB-D frames, camera intrinsics, and pose file (`poses_odom_RGBD_slam.txt`).
+*   **Hybrid Adaptation Options**:
+    *   `--pose_ratio`: Float (default `0.6`). The fraction of total warps that are relative pose-supervised (`0.6` implies 60% relative pose projection and 40% random 3D/2D homographies).
+    *   `--poses_file`: Filename of the SLAM poses text file (default `poses_odom_RGBD_slam.txt`).
+    *   `--max_dist` / `--min_dist`: Maximum/minimum camera translation distance in meters (default `2.0` / `0.1`) to search for neighboring frames.
+    *   `--max_angle`: Maximum relative camera orientation change in degrees (default `30.0`).
+    *   `--min_overlap`: Minimum covisibility field-of-view overlap fraction (default `0.1`).
+    *   `--max_neighbors`: Maximum number of co-visible neighboring candidate frames to select from (default `10`).
 *   **Output**: `data/output/slam/exports/pseudo_labels_slam.h5` and image lists.
 
 ---

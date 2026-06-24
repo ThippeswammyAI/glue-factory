@@ -12,6 +12,7 @@ from tqdm import tqdm
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import yaml
+from scipy.spatial.transform import Rotation as R
 
 from gluefactory.models import get_model
 from gluefactory.settings import DATA_PATH
@@ -60,6 +61,117 @@ def load_camera_intrinsics_yaml(info_path):
     k_flat = data["camera_matrix"]["data"]
     K = np.array(k_flat, dtype=np.float32).reshape(3, 3)
     return K
+
+def parse_poses(poses_path):
+    # #timestamp x y z qx qy qz qw
+    poses = {}
+    with open(poses_path, "r") as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.strip().split()
+            if len(parts) < 8:
+                continue
+            ts = parts[0]
+            tx, ty, tz = float(parts[1]), float(parts[2]), float(parts[3])
+            qx, qy, qz, qw = float(parts[4]), float(parts[5]), float(parts[6]), float(parts[7])
+            
+            rot = R.from_quat([qx, qy, qz, qw]).as_matrix()
+            t = np.array([tx, ty, tz])
+            poses[ts] = (rot, t)
+    return poses
+
+def compute_covisibility_overlap_fast(depth_m, R_i, t_i, R_j, t_j, K):
+    H, W = depth_m.shape
+    
+    u, v = np.meshgrid(np.arange(W), np.arange(H))
+    valid = depth_m > 0
+    if not np.any(valid):
+        return 0.0
+        
+    u_valid = u[valid]
+    v_valid = v[valid]
+    d_valid = depth_m[valid]
+    
+    # K_inv
+    K_inv = np.linalg.inv(K)
+    pixels_homo = np.stack([u_valid, v_valid, np.ones_like(u_valid)], axis=0)
+    
+    # 3D points in camera i
+    P_c_i = d_valid * (K_inv @ pixels_homo)
+    
+    # 3D points in world
+    P_w = R_i @ P_c_i + t_i[:, None]
+    
+    # 3D points in camera j
+    R_j_inv = R_j.T
+    t_j_inv = -R_j.T @ t_j
+    P_c_j = R_j_inv @ P_w + t_j_inv[:, None]
+    
+    # Project to image j
+    z_j = P_c_j[2, :]
+    valid_z = z_j > 1e-3
+    if not np.any(valid_z):
+        return 0.0
+        
+    projected = K @ P_c_j[:, valid_z]
+    u_j = projected[0, :] / z_j[valid_z]
+    v_j = projected[1, :] / z_j[valid_z]
+    
+    in_bounds = (u_j >= 0) & (u_j < W) & (v_j >= 0) & (v_j < H)
+    
+    overlap = np.sum(in_bounds) / len(d_valid)
+    return overlap
+
+def get_neighbor_relative_poses(image_name, dataset_dir, poses, image_names, K, max_dist=2.0, min_dist=0.1, max_angle=30.0, min_overlap=0.1, max_neighbors=10):
+    ts_i = Path(image_name).stem
+    if ts_i not in poses:
+        return []
+    R_i, t_i = poses[ts_i]
+    depth_path_i = dataset_dir / "images/depth" / image_name
+    if not depth_path_i.exists():
+        return []
+        
+    depth_img = cv2.imread(str(depth_path_i), cv2.IMREAD_UNCHANGED)
+    if depth_img is None:
+        return []
+    depth_m = depth_img.astype(np.float32) / 1000.0
+    
+    candidates = []
+    for name_j in image_names:
+        if name_j == image_name:
+            continue
+        ts_j = Path(name_j).stem
+        if ts_j not in poses:
+            continue
+        R_j, t_j = poses[ts_j]
+        
+        dist = np.linalg.norm(t_i - t_j)
+        if dist < min_dist or dist > max_dist:
+            continue
+            
+        R_rel = R_i.T @ R_j
+        trace = np.trace(R_rel)
+        angle = np.arccos(np.clip((trace - 1) / 2, -1.0, 1.0))
+        if np.degrees(angle) > max_angle:
+            continue
+            
+        candidates.append((name_j, R_j, t_j, dist))
+        
+    candidates.sort(key=lambda x: x[-1])
+    candidates = candidates[:max_neighbors * 2]
+    
+    valid_neighbors = []
+    for name_j, R_j, t_j, dist in candidates:
+        # Check overlap
+        overlap = compute_covisibility_overlap_fast(depth_m, R_i, t_i, R_j, t_j, K)
+        if overlap >= min_overlap:
+            R_rel = R_j.T @ R_i
+            t_rel = R_j.T @ (t_i - t_j)
+            valid_neighbors.append((R_rel, t_rel))
+            if len(valid_neighbors) >= max_neighbors:
+                break
+    return valid_neighbors
 
 def sample_random_3d_transform(difficulty=0.7):
     max_tx = 0.3 * difficulty
@@ -193,7 +305,7 @@ def warp_3d_projective_torch_fast(img_t, precomputed, R_t, t_t, K_t, device):
     
     return warped_img, valid_mask, warped_coord_map
 
-def run_homographic_adaptation(image_name, dataset_dir, model, num_warps=50, detection_threshold=0.015, nms_radius=4, warp_mode="3d", K=None, use_gpu=True):
+def run_homographic_adaptation(image_name, dataset_dir, model, num_warps=50, detection_threshold=0.015, nms_radius=4, warp_mode="3d", K=None, use_gpu=True, pose_ratio=0.0, neighbors=None):
     device = "cuda" if torch.cuda.is_available() and use_gpu else "cpu"
     
     rgb_path = dataset_dir / "images/rgb" / image_name
@@ -246,9 +358,23 @@ def run_homographic_adaptation(image_name, dataset_dir, model, num_warps=50, det
     global_trials_t += 1.0
     
     # 2. Adaptations
-    for warp_idx in range(num_warps):
+    num_pose_warps = 0
+    if neighbors and len(neighbors) > 0 and pose_ratio > 0.0 and warp_mode == "3d":
+        num_pose_warps = int(num_warps * pose_ratio)
+    num_homography_warps = num_warps - num_pose_warps
+    
+    warp_configs = []
+    for _ in range(num_homography_warps):
+        warp_configs.append(("random", None))
+    for k in range(num_pose_warps):
+        warp_configs.append(("pose", neighbors[k % len(neighbors)]))
+        
+    for warp_idx, (warp_type, warp_data) in enumerate(warp_configs):
         if warp_mode == "3d":
-            R, t = sample_random_3d_transform(difficulty=0.7)
+            if warp_type == "pose":
+                R, t = warp_data
+            else:
+                R, t = sample_random_3d_transform(difficulty=0.7)
             R_t = torch.from_numpy(R).float().to(device)
             t_t = torch.from_numpy(t).float().to(device)
             K_t = torch.from_numpy(K).float().to(device)
@@ -352,6 +478,16 @@ def main():
     parser.add_argument("--num_threads", type=int, default=14)
     parser.add_argument("--split_ratio", type=float, default=0.83)
     parser.add_argument("--weights", type=str, default=None)
+    
+    # Hybrid adaptation configuration
+    parser.add_argument("--pose_ratio", type=float, default=0.6, help="Ratio of pose-supervised warps vs random ones (0.0 to 1.0)")
+    parser.add_argument("--poses_file", type=str, default="poses_odom_RGBD_slam.txt", help="Filename of the poses file")
+    parser.add_argument("--max_dist", type=float, default=2.0, help="Max translation distance for neighboring frames")
+    parser.add_argument("--min_dist", type=float, default=0.1, help="Min translation distance for neighboring frames")
+    parser.add_argument("--max_angle", type=float, default=30.0, help="Max rotation angle for neighboring frames (deg)")
+    parser.add_argument("--min_overlap", type=float, default=0.1, help="Min covisibility overlap threshold")
+    parser.add_argument("--max_neighbors", type=int, default=10, help="Max candidate neighbors to search")
+    
     args = parser.parse_args()
     
     dataset_dir = Path(args.data_dir)
@@ -387,6 +523,15 @@ def main():
         K = load_camera_intrinsics_yaml(calib_path)
         logger.info(f"Loaded camera matrix K:\n{K}")
         
+    poses = None
+    if args.pose_ratio > 0.0 and args.warp_mode == "3d":
+        poses_path = dataset_dir / args.poses_file
+        if poses_path.exists():
+            logger.info(f"Loading poses from {poses_path} for pose-supervised adaptation...")
+            poses = parse_poses(poses_path)
+        else:
+            logger.warning(f"Poses file {poses_path} not found. Proceeding with pure homographic adaptation.")
+
     device = "cuda" if torch.cuda.is_available() and args.use_gpu else "cpu"
     output_h5 = exports_dir / "pseudo_labels_slam.h5"
     logger.info(f"Generating joint multimodal pseudo-labels and saving to {output_h5}...")
@@ -395,9 +540,17 @@ def main():
         with tqdm(total=len(image_names), desc="Homographic Adaptation") as pbar:
             def worker(name):
                 local_model = get_thread_model(args, device)
+                neighbors = []
+                if poses is not None:
+                    neighbors = get_neighbor_relative_poses(
+                        name, dataset_dir, poses, image_names, K,
+                        max_dist=args.max_dist, min_dist=args.min_dist,
+                        max_angle=args.max_angle, min_overlap=args.min_overlap,
+                        max_neighbors=args.max_neighbors
+                    )
                 kpts, scores = run_homographic_adaptation(
                     name, dataset_dir, local_model, num_warps=args.num_warps, detection_threshold=args.thresh, nms_radius=args.nms,
-                    warp_mode=args.warp_mode, K=K, use_gpu=args.use_gpu
+                    warp_mode=args.warp_mode, K=K, use_gpu=args.use_gpu, pose_ratio=args.pose_ratio, neighbors=neighbors
                 )
                 return name, kpts, scores
 
