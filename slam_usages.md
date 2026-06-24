@@ -27,6 +27,48 @@ Outputs/training/superglue_slam_run/checkpoint_best.tar
       ▼  Step 6: Evaluate models on SLAM Evaluation Pipeline
 Metrics (mreproj_prec, mepi_prec, mrel_pose_error)
 ```
+---
+
+## Dataset Directory Structure & Format
+
+Before running the pipeline, ensure your dataset directory (e.g., `data/output/sample_slam` or `data/output/slam`) is structured as follows:
+
+```text
+data/output/sample_slam/
+├── poses_odom_RGBD_slam.txt
+└── images/
+    ├── rgb/
+    │   ├── <timestamp>.png
+    │   └── ...
+    ├── depth/
+    │   ├── <timestamp>.png
+    │   └── ...
+    └── calib/
+        ├── <timestamp>.yaml
+        └── ...
+```
+
+### Format Specifications:
+* **RGB Images (`images/rgb/`)**: PNG or JPG format RGB/grayscale frames, named `<timestamp>.<ext>`.
+* **Depth Images (`images/depth/`)**: Must be **16-bit PNG format** where values represent depth in millimeters. Depth filenames must **exactly match** their corresponding RGB filename.
+* **Camera Calibration (`images/calib/`)**: YAML files named `<timestamp>.yaml` containing a `camera_matrix` (flattened $3 \times 3$ intrinsic matrix $K$). For example:
+  ```yaml
+  %YAML:1.0
+  ---
+  camera_name: "1775717079.306867"
+  image_width: 512
+  image_height: 207
+  camera_matrix:
+     rows: 3
+     cols: 3
+     data: [ 256., 0., 256., 0., 256., 103.9, 0., 0., 1. ]
+  ```
+* **Poses File (`poses_odom_RGBD_slam.txt`)**: A text file located at the root of the dataset directory containing the 6-DOF poses. Each line represents a frame, structured as:
+  ```text
+  #timestamp x y z qx qy qz qw
+  1775717079.306867 1.030000 0.000000 1.860000 -0.500000 0.500002 -0.500000 0.499998
+  ```
+  The `timestamp` key must match the stem of the image filenames.
 
 ---
 
