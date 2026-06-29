@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """
 Export SuperPoint and SuperGlue .tar checkpoints to TorchScript .pt format
-for use with RTAB-Map's C++ Torch integration.
+for use with RTAB-Map's C++ Torch integration (CPU and CUDA).
 
 SuperPoint output (tuple):
   (score_map [1, H, W], desc_map [1, 256, H/8, W/8])
 
 SuperGlue input/output (dicts):
-  Input:  keypoints0/1, descriptors0/1, scores0/1, image0/1
-  Output: matches0, matching_scores0
+  Input:  keypoints0/1 (1xNx2), descriptors0/1 (1x256xN),
+          scores0/1 (1xN), image0/1 (1x1xHxW)
+  Output: matches0 (1xN int64), matching_scores0 (1xN float32)
 
 Usage:
   python export_to_torchscript.py \
       --sp_ckpt outputs/training/superpoint_slam_run/checkpoint_best.tar \
-      --sg_ckpt outputs/training/superglue_slam_run/checkpoint_best.tar
+      --sg_ckpt outputs/training/superglue_slam_run/checkpoint_best.tar \
+      --sp_out /path/to/superpoint.pt \
+      --sg_out /path/to/superglue.pt
 """
 
 import argparse
 import sys
 from pathlib import Path
+from typing import Dict
 
 import torch
 import torch.nn as nn
@@ -30,9 +34,7 @@ sys.path.insert(0, str(ROOT))
 # ── SuperPoint TorchScript wrapper ─────────────────────────────────────────────
 
 class SuperPointTorchScript(nn.Module):
-    """Wrapper that outputs (score_map, desc_map) tuple
-    matching the SuperPoint C++ struct's forward() output.
-    """
+    """Traced wrapper: (score_map [1,H,W], desc_map [1,256,H/8,W/8])"""
 
     def __init__(self, model):
         super().__init__()
@@ -76,12 +78,7 @@ def _build_superpoint(ckpt_path: Path) -> nn.Module:
     return model
 
 
-def export_superpoint(
-    ckpt_path: Path,
-    out_path: Path,
-    h: int,
-    w: int,
-) -> None:
+def export_superpoint(ckpt_path: Path, out_path: Path, h: int, w: int) -> None:
     print(f"\n[SP] loading  {ckpt_path}")
     sp = _build_superpoint(ckpt_path)
     wrapper = SuperPointTorchScript(sp).eval()
@@ -92,7 +89,6 @@ def export_superpoint(
         traced.save(str(out_path))
 
     print(f"[SP] saved  → {out_path}")
-    # Verify
     try:
         loaded = torch.jit.load(str(out_path))
         out = loaded(dummy)
@@ -104,7 +100,7 @@ def export_superpoint(
 # ── SuperGlue TorchScript wrapper ──────────────────────────────────────────────
 
 class _SuperGlueMatcher(nn.Module):
-    """Inner matching logic with explicit tensor inputs (traceable)."""
+    """Inner matching logic (traced with explicit tensor inputs)."""
 
     def __init__(self, model, n_sinkhorn: int):
         super().__init__()
@@ -115,6 +111,9 @@ class _SuperGlueMatcher(nn.Module):
         self.desc_dim = model.conf.descriptor_dim
         self.n_sinkhorn = n_sinkhorn
         self.threshold = model.conf.filter_threshold
+        # Inline these so they're available as attributes at script time
+        self._log_opt = None
+        self._arange_like = None
 
     @staticmethod
     def _norm_kpts(kpts: torch.Tensor, size: torch.Tensor) -> torch.Tensor:
@@ -165,31 +164,44 @@ class _SuperGlueMatcher(nn.Module):
         return m0, m1, msc0, msc1
 
 
-class SuperGlueTorchScript(nn.Module):
-    """Wrapper that takes the dict format used by RTAB-Map's SuperGlueTorch.cc
-    and returns a dict with matches0 / matching_scores0.
+class _SuperGlueScriptWrapper(nn.Module):
+    """Scripted dict-I/O wrapper around the traced matcher.
+
+    This wrapper is torch.jit.script'ed so that image size extraction
+    from tensor shapes is **dynamic** (not baked as constants), making
+    the model work correctly with varying image resolutions on both
+    CPU and CUDA.
     """
 
-    def __init__(self, matcher: _SuperGlueMatcher):
+    def __init__(self, traced_matcher):
         super().__init__()
-        self.matcher = matcher
+        self.matcher = traced_matcher
 
-    def forward(self, data: dict):
+    def forward(self, data: Dict[str, torch.Tensor]):
         kpts0 = data["keypoints0"]
         kpts1 = data["keypoints1"]
-        desc0 = data["descriptors0"].transpose(1, 2)
-        desc1 = data["descriptors1"].transpose(1, 2)
         scores0 = data["scores0"]
         scores1 = data["scores1"]
+        desc0 = data["descriptors0"].transpose(1, 2)
+        desc1 = data["descriptors1"].transpose(1, 2)
 
-        h0, w0 = data["image0"].shape[2], data["image0"].shape[3]
-        h1, w1 = data["image1"].shape[2], data["image1"].shape[3]
-        size0 = torch.tensor([[float(w0), float(h0)]], device=kpts0.device)
-        size1 = torch.tensor([[float(w1), float(h1)]], device=kpts1.device)
+        img0 = data["image0"]
+        img1 = data["image1"]
+
+        h0 = img0.size(2)
+        w0 = img0.size(3)
+        h1 = img1.size(2)
+        w1 = img1.size(3)
+
+        dtype = kpts0.dtype
+        device = kpts0.device
+        size0 = torch.tensor([[w0, h0]], dtype=dtype, device=device)
+        size1 = torch.tensor([[w1, h1]], dtype=dtype, device=device)
 
         m0, m1, msc0, msc1 = self.matcher(
             kpts0, kpts1, desc0, desc1, scores0, scores1, size0, size1
         )
+
         return {"matches0": m0, "matching_scores0": msc0}
 
 
@@ -231,34 +243,53 @@ def export_superglue(
     out_path: Path,
     N: int,
     sinkhorn_iters: int = None,
+    h: int = 480,
+    w: int = 640,
+    device: str = "cpu",
 ) -> None:
     print(f"\n[SG] loading  {ckpt_path}")
     sg, n_sink = _build_superglue(ckpt_path, sinkhorn_iters)
     print(f"     sinkhorn iterations: {n_sink}")
 
+    # Step 1: trace the inner matcher (no dict I/O, clean tensor->tensor)
     matcher = _SuperGlueMatcher(sg, n_sink).eval()
-    wrapper = SuperGlueTorchScript(matcher).eval()
-
+    if device != "cpu" and torch.cuda.is_available():
+        matcher = matcher.cuda()
+        print(f"     using device: {device}")
     B, D = 1, 256
-    dummy = {
-        "keypoints0": torch.zeros(B, N, 2),
-        "keypoints1": torch.zeros(B, N, 2),
-        "descriptors0": torch.zeros(B, D, N),
-        "descriptors1": torch.zeros(B, D, N),
-        "scores0": torch.ones(B, N),
-        "scores1": torch.ones(B, N),
-        "image0": torch.zeros(B, 1, 480, 640),
-        "image1": torch.zeros(B, 1, 480, 640),
-    }
-
+    dummy_kpts = torch.zeros(B, N, 2, device=device)
+    dummy_desc = torch.zeros(B, N, D, device=device)
+    dummy_sc = torch.ones(B, N, device=device)
+    dummy_size = torch.tensor([[float(w), float(h)]], device=device)
     with torch.no_grad():
-        traced = torch.jit.trace(wrapper, (dummy,), strict=False)
-        traced.save(str(out_path))
+        traced_matcher = torch.jit.trace(
+            matcher,
+            (dummy_kpts, dummy_kpts, dummy_desc, dummy_desc,
+             dummy_sc, dummy_sc, dummy_size, dummy_size),
+        )
+
+    # Step 2: script the dict wrapper (dynamic shape extraction)
+    wrapper = _SuperGlueScriptWrapper(traced_matcher).eval()
+    dummy_data = {
+        "keypoints0": dummy_kpts,
+        "keypoints1": dummy_kpts,
+        "descriptors0": torch.zeros(B, D, N, device=device),
+        "descriptors1": torch.zeros(B, D, N, device=device),
+        "scores0": dummy_sc,
+        "scores1": dummy_sc,
+        "image0": torch.zeros(B, 1, h, w, device=device),
+        "image1": torch.zeros(B, 1, h, w, device=device),
+    }
+    with torch.no_grad():
+        scripted = torch.jit.script(wrapper)
+        # Verify it works before saving
+        _ = scripted(dummy_data)
+        scripted.save(str(out_path))
 
     print(f"[SG] saved  → {out_path}")
     try:
         loaded = torch.jit.load(str(out_path))
-        out = loaded(dummy)
+        out = loaded(dummy_data)
         print(f"     output: matches0={out['matches0'].shape}, "
               f"matching_scores0={out['matching_scores0'].shape}")
     except Exception as e:
@@ -276,8 +307,10 @@ def main():
     p.add_argument("--image_h", type=int, default=480)
     p.add_argument("--image_w", type=int, default=640)
     p.add_argument("--num_kpts", type=int, default=2048,
-                    help="Number of keypoints for SG trace (must be >= actual max)")
+                   help="Number of keypoints for SG trace")
     p.add_argument("--sg_sinkhorn_iters", type=int, default=None)
+    p.add_argument("--device", type=str, default="cpu",
+                   help="Device for tracing (cpu or cuda)")
     args = p.parse_args()
 
     if args.sp_ckpt is None and args.sg_ckpt is None:
@@ -287,7 +320,8 @@ def main():
 
     if args.sp_ckpt is not None:
         if not args.sp_ckpt.exists():
-            print(f"Error: SP checkpoint not found: {args.sp_ckpt}", file=sys.stderr)
+            print(f"Error: SP checkpoint not found: {args.sp_ckpt}",
+                  file=sys.stderr)
             sys.exit(1)
         args.sp_out.parent.mkdir(parents=True, exist_ok=True)
         export_superpoint(args.sp_ckpt, args.sp_out,
@@ -295,11 +329,14 @@ def main():
 
     if args.sg_ckpt is not None:
         if not args.sg_ckpt.exists():
-            print(f"Error: SG checkpoint not found: {args.sg_ckpt}", file=sys.stderr)
+            print(f"Error: SG checkpoint not found: {args.sg_ckpt}",
+                  file=sys.stderr)
             sys.exit(1)
         args.sg_out.parent.mkdir(parents=True, exist_ok=True)
         export_superglue(args.sg_ckpt, args.sg_out,
-                         args.num_kpts, args.sg_sinkhorn_iters)
+                         args.num_kpts, args.sg_sinkhorn_iters,
+                         args.image_h, args.image_w,
+                         args.device)
 
 
 if __name__ == "__main__":
