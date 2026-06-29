@@ -11,7 +11,6 @@ Supports two modes:
 
 import json
 import logging
-import torch
 import numpy as np
 import cv2
 from pathlib import Path
@@ -24,44 +23,6 @@ logger = logging.getLogger("export_matches")
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-def load_image(path, resize_max=0):
-    img_bgr = cv2.imread(str(path))
-    if img_bgr is None:
-        raise FileNotFoundError(f"Cannot load: {path}")
-    img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    h, w = img_gray.shape[:2]
-    if resize_max > 0:
-        scale = resize_max / max(h, w)
-        w_new = int(round(w * scale / 8) * 8)
-        h_new = int(round(h * scale / 8) * 8)
-        img_gray = cv2.resize(img_gray, (w_new, h_new), interpolation=cv2.INTER_AREA)
-        img_bgr  = cv2.resize(img_bgr,  (w_new, h_new), interpolation=cv2.INTER_AREA)
-    else:
-        w_new = (w // 8) * 8
-        h_new = (h // 8) * 8
-        if w_new != w or h_new != h:
-            img_gray = cv2.resize(img_gray, (w_new, h_new), interpolation=cv2.INTER_AREA)
-            img_bgr  = cv2.resize(img_bgr,  (w_new, h_new), interpolation=cv2.INTER_AREA)
-    return img_bgr, img_gray
-
-
-def get_image_pairs(input_path):
-    path = Path(input_path)
-    if "," in input_path:
-        parts = [Path(p.strip()) for p in input_path.split(",")]
-        if len(parts) == 2:
-            return [(parts[0], parts[1])]
-
-    if not path.is_dir():
-        logger.error(f"Not a directory: {input_path}")
-        return []
-
-    exts = {"*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tiff",
-            "*.PNG", "*.JPG", "*.JPEG"}
-    files = sorted({f for ext in exts for f in path.glob(ext)})
-    return [(files[i], files[i + 1]) for i in range(len(files) - 1)]
-
 
 def write_data(out_dir, records):
     out_dir = Path(out_dir)
@@ -83,7 +44,7 @@ def write_data(out_dir, records):
 # ---------------------------------------------------------------------------
 
 def run_checkpoint_mode(args):
-    from gluefactory.utils.experiments import load_experiment
+    from gluefactory.slam.matcher import SLAMMatcher
 
     sg_ckpt = Path(args.checkpoint_superglue)
     sp_ckpt = Path(args.checkpoint_superpoint)
@@ -93,98 +54,56 @@ def run_checkpoint_mode(args):
     if not sp_ckpt.exists():
         logger.error(f"SuperPoint checkpoint not found: {sp_ckpt}"); return
 
-    pairs = get_image_pairs(args.input)
-    if not pairs:
-        logger.error(f"No image pairs found in: {args.input}"); return
-    if args.max_pairs > 0:
-        pairs = pairs[: args.max_pairs]
+    conf = {
+        "nms_radius": args.nms_radius,
+        "max_num_keypoints": args.max_num_keypoints,
+        "detection_threshold": args.detection_threshold,
+        "filter_threshold": args.filter_threshold,
+    }
+    matcher = SLAMMatcher(sg_ckpt, sp_ckpt, conf=conf)
+    max_pairs = args.max_pairs if args.max_pairs > 0 else None
+    results = matcher.match_directory(args.input, max_pairs=max_pairs, resize=args.resize)
+    if not results:
+        logger.error("No pairs were matched.")
+        return
 
-    logger.info(f"Processing {len(pairs)} pairs on "
-                f"{'cuda' if torch.cuda.is_available() else 'cpu'}")
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = load_experiment(str(sg_ckpt), {
-        "extractor": {
-            "name": "superpoint_open",
-            "weights": str(sp_ckpt),
-            "nms_radius": args.nms_radius,
-            "max_num_keypoints": args.max_num_keypoints,
-            "detection_threshold": args.detection_threshold,
-            "remove_borders": 4,
-            "trainable": False,
-        },
-        "matcher": {
-            "name": "gluefactory_nonfree.superglue",
-            "filter_threshold": args.filter_threshold,
-        },
-    }).to(device).eval()
-
-    out_dir   = Path(args.output_dir)
-    img_dir   = out_dir / "images"
+    out_dir = Path(args.output_dir)
+    img_dir = out_dir / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
 
     records = []
-    for idx, (p0, p1) in enumerate(tqdm(pairs, desc="Matching")):
-        try:
-            img0_bgr, img0_gray = load_image(p0, args.resize)
-            img1_bgr, img1_gray = load_image(p1, args.resize)
+    for r in tqdm(results, desc="Saving"):
+        idx = r["idx"]
+        n0 = f"pair_{idx}_view0.png"
+        n1 = f"pair_{idx}_view1.png"
+        cv2.imwrite(str(img_dir / n0), r["img0_bgr"])
+        cv2.imwrite(str(img_dir / n1), r["img1_bgr"])
 
-            n0 = f"pair_{idx}_view0.png"
-            n1 = f"pair_{idx}_view1.png"
-            cv2.imwrite(str(img_dir / n0), img0_bgr)
-            cv2.imwrite(str(img_dir / n1), img1_bgr)
-
-            t0 = torch.from_numpy(img0_gray).float().div(255).unsqueeze(0).unsqueeze(0).to(device)
-            t1 = torch.from_numpy(img1_gray).float().div(255).unsqueeze(0).unsqueeze(0).to(device)
-
-            with torch.no_grad():
-                pred = model({"view0": {"image": t0}, "view1": {"image": t1}})
-
-            kpts0    = pred["keypoints0"][0].cpu().numpy()
-            kpts1    = pred["keypoints1"][0].cpu().numpy()
-            scores0  = pred["keypoint_scores0"][0].cpu().numpy()
-            scores1  = pred["keypoint_scores1"][0].cpu().numpy()
-            matches0 = pred["matches0"][0].cpu().numpy()
-            mscores0 = pred["matching_scores0"][0].cpu().numpy()
-
-            matches = [
-                [int(i0), int(i1), float(mscores0[i0])]
-                for i0, i1 in enumerate(matches0) if i1 != -1
-            ]
-            n_match = len(matches)
-            ratio   = n_match / max(1, min(len(kpts0), len(kpts1)))
-            avg_s   = float(np.mean([m[2] for m in matches])) if matches else 0.0
-
-            logger.info(
-                f"[{idx}] {p0.name} ↔ {p1.name}  "
-                f"kpts {len(kpts0)}/{len(kpts1)}  "
-                f"matches {n_match} ({ratio:.1%})  avg {avg_s:.3f}"
-            )
-
-            records.append({
-                "idx":         idx,
-                "name0":       p0.name,
-                "name1":       p1.name,
-                "image0_url":  f"images/{n0}",
-                "image1_url":  f"images/{n1}",
-                "keypoints0":  kpts0.tolist(),
-                "keypoints1":  kpts1.tolist(),
-                "scores0":     scores0.tolist(),
-                "scores1":     scores1.tolist(),
-                "matches":     matches,
-                "metrics": {
-                    "total_kpts0": int(len(kpts0)),
-                    "total_kpts1": int(len(kpts1)),
-                    "num_matches": n_match,
-                    "match_ratio": float(ratio),
-                    "avg_mscore":  float(avg_s),
-                },
-                "image_width":  int(img0_bgr.shape[1]),
-                "image_height": int(img0_bgr.shape[0]),
-            })
-
-        except Exception as e:
-            logger.error(f"Error on pair {idx}: {e}", exc_info=True)
+        matches = [
+            [int(i0), int(i1), float(r["mscores0"][i0])]
+            for i0, i1 in enumerate(r["matches0"]) if i1 != -1
+        ]
+        m = r["metrics"]
+        logger.info(
+            f"[{idx}] {r['name0']} ↔ {r['name1']}  "
+            f"kpts {m['total_kpts0']}/{m['total_kpts1']}  "
+            f"matches {m['num_matches']} ({m['match_ratio']:.1%})  avg {m['avg_mscore']:.3f}"
+        )
+        records.append({
+            "idx":        idx,
+            "name0":      r["name0"],
+            "name1":      r["name1"],
+            "image0_url": f"images/{n0}",
+            "image1_url": f"images/{n1}",
+            "keypoints0": r["keypoints0"].tolist(),
+            "keypoints1": r["keypoints1"].tolist(),
+            "scores0":    r["scores0"].tolist(),
+            "scores1":    r["scores1"].tolist(),
+            "matches":    matches,
+            "metrics":    m,
+            "image_width":  int(r["img0_bgr"].shape[1]),
+            "image_height": int(r["img0_bgr"].shape[0]),
+        })
 
     write_data(out_dir, records)
 
@@ -198,6 +117,7 @@ def run_dataset_mode(args):
     from gluefactory.datasets.homographies import HomographyDataset
     from gluefactory.geometry.gt_generation import gt_matches_from_homography
     from gluefactory.settings import DATA_PATH
+    import torch
 
     dataset_dir = DATA_PATH / args.dataset
     out_dir     = dataset_dir / "visualizations/matches_interactive"
