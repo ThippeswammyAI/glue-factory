@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""
+Visualize SLAM image pairs with SuperPoint keypoints from an H5 feature cache.
+
+For each pair in a pairs_train.txt / pairs_val.txt file, renders the two images
+side-by-side with detected keypoints overlaid (coloured by score) and saves a
+PNG. Also generates a browsable HTML index of all saved images.
+
+Usage:
+    python -m gluefactory.scripts.visualize_slam_pairs \\
+        --data_dir    data/output/slam \\
+        --pairs_file  pairs_train.txt \\
+        --h5_features data/output/slam/exports/sp_features_slam.h5 \\
+        --max_pairs   100 \\
+        --score_thresh 0.01
+"""
+
 import argparse
 import logging
 from pathlib import Path

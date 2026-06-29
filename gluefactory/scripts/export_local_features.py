@@ -1,3 +1,21 @@
+"""
+Export local features (keypoints, descriptors, scores) from a dataset to H5.
+
+Iterates over a dataset split, runs the configured extractor (SuperPoint,
+DISK, ALIKED, …), and writes per-image features to an HDF5 file that can be
+loaded by the training pipeline via the load_features cache mechanism.
+
+Usage:
+    python -m gluefactory.scripts.export_local_features sp \\
+        --conf gluefactory/configs/superpoint+lightglue_homography.yaml \\
+        --export_name my_sp_export
+
+    # Override dataset path:
+    python -m gluefactory.scripts.export_local_features sp \\
+        --conf gluefactory/configs/superpoint+superglue_slam.yaml \\
+        --export_name sp_features_slam
+"""
+
 import argparse
 import logging
 from pathlib import Path

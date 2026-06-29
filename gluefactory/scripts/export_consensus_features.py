@@ -1,3 +1,21 @@
+"""
+Extract SuperPoint descriptors at consensus keypoint locations and save to H5.
+
+Takes a pseudo-labels H5 file (containing consensus keypoints) and a trained
+SuperPoint checkpoint, re-runs the dense descriptor backbone on each image, then
+samples descriptors at the consensus keypoint coordinates. The result is an H5
+file with keypoints, keypoint_scores, and descriptors ready for SuperGlue
+training or evaluation.
+
+Usage:
+    python -m gluefactory.scripts.export_consensus_features \\
+        --dataset         output/slam \\
+        --pseudo_labels_h5 data/output/slam/exports/pseudo_labels_slam.h5 \\
+        --weights         outputs/training/superpoint_slam_run/checkpoint_best.tar \\
+        --output_h5       data/output/slam/exports/sp_features_slam.h5 \\
+        --modality        rgb
+"""
+
 import argparse
 import h5py
 import numpy as np

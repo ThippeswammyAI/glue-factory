@@ -1,4 +1,28 @@
 #!/usr/bin/env python3
+"""
+Prepare SuperPoint pseudo-labels for SLAM image sequences.
+
+Runs SuperPoint on every image in the SLAM dataset and writes raw detections
+(keypoints, scores, descriptors) to an HDF5 cache. Supports multi-threaded
+inference with one model instance per thread. Optionally applies pose-guided
+hybrid adaptation to suppress dynamic-object keypoints using depth and camera
+poses from the SLAM trajectory.
+
+Output H5 structure (per image):
+    <image_stem>/keypoints        float32 [N, 2]
+    <image_stem>/keypoint_scores  float32 [N]
+    <image_stem>/descriptors      float32 [N, 256]
+
+Usage:
+    python -m gluefactory.scripts.prepare_slam_superpoint \\
+        --data_dir data/output/slam \\
+        --output_h5 data/output/slam/exports/pseudo_labels_slam.h5 \\
+        --weights outputs/training/superpoint_slam_run/checkpoint_best.tar \\
+        --modality rgb \\
+        --max_keypoints 512 \\
+        --num_workers 4
+"""
+
 import argparse
 import logging
 from pathlib import Path

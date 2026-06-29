@@ -1,3 +1,17 @@
+"""
+Export local features from the MegaDepth dataset to HDF5 for training.
+
+Iterates over MegaDepth scenes and their undistorted image sets, runs the
+configured extractor, and writes per-image features (keypoints, descriptors,
+scores) to HDF5 files. The resulting files can be used as a load_features cache
+during SuperGlue or LightGlue training on MegaDepth pairs.
+
+Usage:
+    python -m gluefactory.scripts.export_megadepth sp \\
+        --conf   gluefactory/configs/superpoint+lightglue_megadepth.yaml \\
+        --export_name sp_megadepth_r1600
+"""
+
 import argparse
 import logging
 from pathlib import Path

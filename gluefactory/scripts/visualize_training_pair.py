@@ -1,3 +1,16 @@
+"""
+Visualize a single training pair: SuperPoint detections + GT homography matches.
+
+Loads one sample from the HomographyDataset, runs a SuperPoint extractor, then
+uses the ground-truth homography to compute correct matches and renders the
+result with matplotlib. Intended for interactive debugging in a notebook or as a
+quick visual sanity-check after training.
+
+Usage:
+    python -m gluefactory.scripts.visualize_training_pair
+    # (edit CONFIG constant at the top of the file to point at your config)
+"""
+
 import torch
 import cv2
 import numpy as np

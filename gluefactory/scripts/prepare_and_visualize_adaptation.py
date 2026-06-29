@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+"""
+Prepare and visualize the hybrid pose-guided SuperPoint pseudo-label adaptation.
+
+Combines raw SuperPoint detections with depth/pose information to produce
+improved pseudo-labels that suppress dynamic objects and favour geometrically
+stable keypoints. Also generates side-by-side visualisations comparing raw
+detections to adapted labels so the effect of adaptation can be inspected
+visually.
+
+Reads:  raw SP detections H5, depth images, camera poses
+Writes: adapted pseudo-labels H5, visualisation PNGs in the dataset directory
+
+Usage:
+    python -m gluefactory.scripts.prepare_and_visualize_adaptation \\
+        --data_dir       data/output/slam \\
+        --raw_h5         data/output/slam/exports/raw_sp.h5 \\
+        --output_h5      data/output/slam/exports/pseudo_labels_slam.h5 \\
+        --poses_file     data/output/slam/poses.txt \\
+        --modality       rgb \\
+        --num_vis        20
+"""
+
 import argparse
 import logging
 from pathlib import Path

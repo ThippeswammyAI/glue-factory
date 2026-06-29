@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""
+Visualize SuperPoint pseudo-labels stored in an HDF5 file on SLAM images.
+
+Overlays keypoints (coloured by detection score) onto the corresponding raw
+images and saves side-by-side PNGs. Useful for verifying that the pseudo-label
+generation step produced sensible detections before starting SuperPoint training.
+
+Usage:
+    python -m gluefactory.scripts.visualize_slam_labels \\
+        --data_dir  data/output/slam \\
+        --h5_labels data/output/slam/exports/pseudo_labels_slam.h5 \\
+        --modality  rgb \\
+        --max_imgs  50 \\
+        --output_dir data/output/slam/visualizations/slam_labels
+"""
+
 import argparse
 import logging
 from pathlib import Path

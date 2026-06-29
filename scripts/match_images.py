@@ -1,3 +1,30 @@
+"""
+Run SuperPoint + SuperGlue inference on image pairs and produce an interactive
+HTML match-visualization dashboard.
+
+Loads both models from training checkpoints, runs them on all consecutive image
+pairs in the input directory, saves per-pair static PNG plots, and writes a
+self-contained interactive dashboard (index.html + matches_data.js) to the
+output directory.
+
+See also:
+  scripts/export_interactive_matches.py  — same inference, data-only output (no HTML)
+
+Usage:
+    MPLBACKEND=Agg python scripts/match_images.py \\
+        --input               data/output/slam/images/rgb \\
+        --checkpoint_superglue  outputs/training/superglue_slam_run/checkpoint_best.tar \\
+        --checkpoint_superpoint outputs/training/superpoint_slam_run/checkpoint_best.tar \\
+        --output_dir          data/output/slam/visualizations/match_inference_rgb \\
+        --resize 512
+
+    # Single pair:
+    MPLBACKEND=Agg python scripts/match_images.py \\
+        --input img0.png,img1.png \\
+        --checkpoint_superglue  outputs/training/superglue_slam_run/checkpoint_best.tar \\
+        --checkpoint_superpoint outputs/training/superpoint_slam_run/checkpoint_best.tar
+"""
+
 import os
 import argparse
 import logging
@@ -15,11 +42,10 @@ from gluefactory.utils.experiments import load_experiment
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("superglue_inference")
 
-# Default paths
-DEFAULT_SUPERGLUE_CKPT = "/home/thippe/workspaces/AiMl/glue-factory/outputs/training/superglue_slam_run/checkpoint_best.tar"
-DEFAULT_SUPERPOINT_CKPT = "outputs/training/superpoint_custom_run_0_force_true/checkpoint_best.tar"
-DEFAULT_INPUT_DIR = "data/output/sample_data/images/reflectivity"
-DEFAULT_OUTPUT_DIR = "data/output/sample_data/visualizations/superglue_inference"
+DEFAULT_SUPERGLUE_CKPT  = "outputs/training/superglue_slam_run/checkpoint_best.tar"
+DEFAULT_SUPERPOINT_CKPT = "outputs/training/superpoint_slam_run/checkpoint_best.tar"
+DEFAULT_INPUT_DIR  = "data/output/slam/images/rgb"
+DEFAULT_OUTPUT_DIR = "data/output/slam/visualizations/match_inference_rgb"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Test SuperGlue model inference on image pairs.")

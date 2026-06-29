@@ -1,3 +1,5 @@
+"""Benchmark the data-loading + homography-warp loop without model inference."""
+
 import time
 import numpy as np
 

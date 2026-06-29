@@ -1,3 +1,19 @@
+"""
+Visualize random samples from a training dataset with keypoints and GT matches.
+
+Loads a dataset using a config file, samples pairs from the train/val splits,
+and renders each pair as a side-by-side image with cached keypoints and
+ground-truth matches drawn. Useful for sanity-checking a dataset configuration
+before starting a training run.
+
+Usage:
+    python -m gluefactory.scripts.visualize_training_dataset \\
+        --conf   gluefactory/configs/superpoint+superglue_slam.yaml \\
+        --split  train \\
+        --num    20 \\
+        --output data/output/slam/visualizations/training_dataset
+"""
+
 import os
 import csv
 import cv2

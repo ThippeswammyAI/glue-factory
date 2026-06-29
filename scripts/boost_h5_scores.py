@@ -1,3 +1,17 @@
+"""
+Scale keypoint_scores in an HDF5 feature file by a constant factor.
+
+Useful when SuperPoint scores are too low for downstream filtering thresholds.
+Clamps output to [0, 1]. All other datasets (keypoints, descriptors) are copied
+unchanged. Creates a new output file; does not modify the input in place.
+
+Usage:
+    python scripts/boost_h5_scores.py \\
+        --input  data/output/slam/exports/sp_features_slam.h5 \\
+        --output data/output/slam/exports/sp_features_slam_boosted.h5 \\
+        --scale  5.0
+"""
+
 import h5py
 import numpy as np
 import argparse

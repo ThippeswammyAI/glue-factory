@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+"""
+Generate training/validation image pair lists for the SLAM dataset.
+
+Uses camera poses from the SLAM trajectory to find geometrically overlapping
+image pairs: two frames are paired if their translational distance falls within
+[--min_dist, --max_dist] and their co-visibility (estimated from depth overlap)
+exceeds a threshold. Writes pairs_train.txt and pairs_val.txt in the dataset
+directory, one pair per line formatted as "rgb/frame_a.png rgb/frame_b.png".
+
+Usage:
+    python -m gluefactory.scripts.generate_slam_pairs \\
+        --data_dir    data/output/slam \\
+        --poses_file  data/output/slam/poses.txt \\
+        --modality    rgb \\
+        --min_dist    0.05 \\
+        --max_dist    1.0  \\
+        --val_ratio   0.15
+"""
+
 import argparse
 import logging
 from pathlib import Path

@@ -1,3 +1,18 @@
+"""
+Visualize SuperPoint keypoint detections from a trained checkpoint on raw images.
+
+Loads a trained SuperPoint model, runs it on every image in the given directory
+(filtered by --modality), overlays detected keypoints coloured by score, and
+saves static PNG visualizations. Useful for quickly inspecting detection quality
+after training or fine-tuning.
+
+Usage:
+    python scripts/visualize_custom.py \\
+        --checkpoint outputs/training/superpoint_slam_run/checkpoint_best.tar \\
+        --dataset    data/output/slam/images \\
+        --modality   rgb
+"""
+
 import os
 import argparse
 import logging
@@ -24,19 +39,19 @@ def main():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="outputs/training/superpoint_custom_run/checkpoint_best.tar",
+        default="outputs/training/superpoint_slam_run/checkpoint_best.tar",
         help="Path to trained checkpoint."
     )
     parser.add_argument(
         "--dataset",
         type=str,
-        default="output/sample_data",
+        default="data/output/slam/images",
         help="Dataset name (e.g. output/sample_data)."
     )
     parser.add_argument(
         "--modality",
         type=str,
-        default="reflectivity",
+        default="rgb",
         help="Modality prefix (e.g. reflectivity, nearir, signal)."
     )
     args = parser.parse_args()
