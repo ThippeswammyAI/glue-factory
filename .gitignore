@@ -10,3 +10,4 @@ __pycache__
 back_data_and models.zip
 *.zip
 raw_data_slam/
+hpatches_results.html
