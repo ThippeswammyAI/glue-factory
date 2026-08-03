@@ -31,11 +31,12 @@ model:
     th_negative: 5
     th_epi: 5
   matcher:
-    name: gluefactory_nonfree.superglue
-    descriptor_dim: 256
-    weights: indoor
-    num_sinkhorn_iterations: 100
-    filter_threshold: 0.2
+    name: matchers.lightglue
+    input_dim: 256
+    filter_threshold: 0.1
+    flash: false
+    checkpointed: true
+    weights: superpoint
 
 train:
   seed: 42
