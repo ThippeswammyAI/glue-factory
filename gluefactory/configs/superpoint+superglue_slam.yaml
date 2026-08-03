@@ -7,9 +7,9 @@ data:
   depth_format: png
   pairs_train: pairs_train.txt
   pairs_val: pairs_val.txt
-  train_size: 1400
-  val_size: 282
-  batch_size: 4
+  train_size: 7485
+  val_size: 1534
+  batch_size: 16
   num_workers: 14
   preprocessing:
     resize: 512
