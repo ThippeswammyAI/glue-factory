@@ -9,7 +9,7 @@ data:
   pairs_val: pairs_val.txt
   train_size: 7485
   val_size: 1534
-  batch_size: 16
+  batch_size: 64
   num_workers: 14
   preprocessing:
     resize: 512
