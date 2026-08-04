@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from gluefactory.utils.experiments import load_experiment
 from gluefactory.slam.io import get_image_pairs, load_image
@@ -204,7 +205,7 @@ def run_match_directory(backend, filter_threshold, input_dir, max_pairs=None, re
         pairs = pairs[:max_pairs]
 
     results = []
-    for idx, (p0, p1) in enumerate(pairs):
+    for idx, (p0, p1) in enumerate(tqdm(pairs, desc="Matching")):
         try:
             img0_bgr, img0_gray = load_image(p0, resize)
             img1_bgr, img1_gray = load_image(p1, resize)
