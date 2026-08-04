@@ -185,8 +185,7 @@ class _SuperGlueScriptWrapper(nn.Module):
     from tensor shapes is **dynamic** (not baked as constants), making
     the model work correctly with varying image resolutions on both
     CPU and CUDA.
-class _SuperGlueScriptWrapper(nn.Module):
-    """Scripted dict-I/O wrapper around the traced matcher.
+    Scripted dict-I/O wrapper around the traced matcher.
 
     This wrapper is torch.jit.script'ed so that image size extraction
     from tensor shapes is **dynamic** (not baked as constants), making
