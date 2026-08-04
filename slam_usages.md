@@ -161,44 +161,13 @@ python3 -m gluefactory.train superpoint_sample_run \
 
 ---
 
-## 4. SuperPoint Inference & Feature Export
+## 4. SuperPoint Inference & Export
 
-Export trained SuperPoint keypoints and descriptors to a cached `.h5` file, which will serve as the input for training SuperGlue.
+> The `sp_features_slam.h5` cache needed for SuperGlue/LightGlue training is produced
+> directly by `generate_slam_pairs.py --extract_features` (see Section 6) — there is
 
-### Step 4a — Run the feature export tool
-```bash
-# --- Export from Full Dataset ---
-python3 -m gluefactory.scripts.export_local_features output/slam \
-    --method sp_custom \
-    --export_prefix slam_ \
-    --num_workers 4
-```
-*   *Note*: To load your specific checkpoint, update the `weights` path under the `sp_custom` block in `gluefactory/scripts/export_local_features.py` before running.
-
-### Step 4b — Move export to destination directory
-The training YAML expects the features to be saved in the dataset directory:
-```bash
-mkdir -p data/output/slam/exports
-cp data/exports/slam_custom_SP-k2048-nms4.h5 data/output/slam/exports/sp_features_slam.h5
-```
-
-### Step 4c — Export SuperPoint to TorchScript (.pt) or ONNX
-Export your trained SuperPoint model for inference in C++ or mobile environments.
-
-**Inference with the exported TorchScript model:**
-```bash
-python3 -m gluefactory.scripts.run_inference \
-    --backend exported --matcher none \
-    --extractor_pt superpoint_slam.pt \
-    --input data/output/slam/images/rgb/ \
-    --output all --max_pairs 10 \
-    --detection_threshold 0.01 \
-    --output_dir outputs/
-```
-
-**Output**: `outputs/images/<image>_keypoints.png` (score-coloured keypoint overlay,
-NMS-decoded via `gluefactory.models.extractors.superpoint_open`) plus an HTML grid
-and `keypoints_data.json`.
+Export your trained SuperPoint model to TorchScript (.pt) or ONNX for inference in
+C++ or mobile environments.
 
 **Export to TorchScript (.pt)**:
 ```bash
@@ -223,6 +192,21 @@ python3 -m gluefactory.scripts.export_model \
 
 *   **Input**: Image `[B, 1|3, H, W]` float32 in [0, 1]
 *   **Output**: `scores` `[B, H, W]` (NMS-filtered heatmap), `descriptors` `[B, 256, H/8, W/8]` (L2-normalised)
+
+**Inference with the exported TorchScript model:**
+```bash
+python3 -m gluefactory.scripts.run_inference \
+    --backend exported --matcher none \
+    --extractor_pt superpoint_slam.pt \
+    --input data/output/slam/images/rgb/ \
+    --output all --max_pairs 10 \
+    --detection_threshold 0.01 \
+    --output_dir outputs/
+```
+
+**Output**: `outputs/images/<image>_keypoints.png` (score-coloured keypoint overlay,
+NMS-decoded via `gluefactory.models.extractors.superpoint_open`) plus an HTML grid
+and `keypoints_data.json`.
 
 ---
 
@@ -336,10 +320,9 @@ python3 -m gluefactory.eval.slam \
 ## 10. Inference with SuperGlue
 
 Run SuperGlue matching on an entire image directory and generate an interactive HTML
-dashboard, via the unified `gluefactory.scripts.run_inference` entry point (this
-replaced `scripts/match_images_from_pt.py`, `infer_superpoint.py`, `infer_superglue.py`
-— one script now covers checkpoint or exported-model inference for SuperPoint alone,
-+SuperGlue, or +LightGlue).
+dashboard, via the unified `gluefactory.scripts.run_inference` entry point — one script
+covers checkpoint or exported-model inference for SuperPoint alone, +SuperGlue, or
++LightGlue.
 
 ```bash
 # From the exported .pt models
