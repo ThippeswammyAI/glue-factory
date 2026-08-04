@@ -24,9 +24,7 @@ All stand-alone helper tools live in `scripts/` to keep the project root clean.
 
 | Script | Purpose | How to Run |
 | :--- | :--- | :--- |
-| **`scripts/visualize_custom.py`** | Run custom SuperPoint inference and overlay detected keypoints on a directory of images. | `python3 scripts/visualize_custom.py` |
-| **`scripts/export_interactive_matches.py`** | Run SuperPoint/SuperGlue matching on image pairs and generate an interactive HTML match dashboard. | `python3 scripts/export_interactive_matches.py` |
-| **`scripts/match_images.py`** | Batch-match image pairs using a two-view matching config. | `python3 scripts/match_images.py` |
+| **`gluefactory.scripts.run_inference`** | Unified SuperPoint / SuperPoint+SuperGlue / SuperPoint+LightGlue inference and visualization (checkpoint or exported `.pt`), replacing `visualize_custom.py`, `export_interactive_matches.py`, `match_images.py`, `match_images_from_pt.py`, `infer_superpoint.py`, `infer_superglue.py`. | `python3 -m gluefactory.scripts.run_inference --backend checkpoint --matcher superglue ...` |
 | **`scripts/boost_h5_scores.py`** | Scale up matching scores in an exported HDF5 feature file. | `python3 scripts/boost_h5_scores.py` |
 | **`scripts/filter_h5_file.py`** | Filter keypoints in an HDF5 feature file by confidence score threshold. | `python3 scripts/filter_h5_file.py` |
 | **`scripts/profile_model.py`** | Benchmark inference latency of a specific model. | `python3 scripts/profile_model.py` |
@@ -290,44 +288,42 @@ python3 -m gluefactory.train superpoint_custom_run \
 
 ## 4e. SuperPoint Inference (after training)
 
-Two complementary tools exist for running inference with a trained SuperPoint checkpoint.
+### Visualise Keypoints on Images  (`gluefactory.scripts.run_inference --matcher none`)
 
-### Visualise Keypoints on Images  (`scripts/visualize_custom.py`)
-
-Runs the trained model on every image in a dataset directory and saves
-per-image detection plots **and** a 2×3 collage. Uses `data/<dataset>/images/<modality>/`.
+Runs the trained model alone (no matcher) on every image under `--input` and saves
+a per-image keypoint-overlay PNG (colour = detection score) plus an HTML grid.
+This replaced the old `scripts/visualize_custom.py`.
 
 ```bash
-# CLI args (from scripts/visualize_custom.py argparse)
-#   --checkpoint   path to .tar checkpoint   (default: outputs/training/superpoint_custom_run/checkpoint_best.tar)
-#   --dataset      name under data/           (default: output/sample_data)
-#   --modality     sub-folder name            (default: reflectivity)
+# CLI args (see gluefactory/scripts/run_inference.py --help for the full list)
+#   --backend         checkpoint | exported
+#   --extractor_ckpt   path to .tar checkpoint
+#   --matcher          none (extractor-only)
+#   --input            image directory
+#   --output           html | data | png | all
+#   --output_dir        where to write results
 
 # --- Sample dataset, reflectivity ---
-python3 scripts/visualize_custom.py \
-    --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
-    --dataset    output/sample_data \
-    --modality   reflectivity
+python3 -m gluefactory.scripts.run_inference \
+    --backend checkpoint --matcher none \
+    --extractor_ckpt outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --input data/output/sample_data/images/reflectivity \
+    --output all --output_dir data/output/sample_data/visualizations/custom_detections
 # Outputs → data/output/sample_data/visualizations/custom_detections/
-#            ├── <stem>_detections.png  (one per image)
-#            └── collage.png           (first 6 images)
-
-# --- Full dataset ---
-python3 scripts/visualize_custom.py \
-    --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
-    --dataset    output/dataset \
-    --modality   reflectivity
-# Outputs → data/output/dataset/visualizations/custom_detections/
+#            ├── images/<stem>_keypoints.png  (one per image)
+#            └── images/index.html            (browsable grid)
 
 # --- Different modality (near-IR) ---
-python3 scripts/visualize_custom.py \
-    --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
-    --dataset    output/dataset \
-    --modality   nearir
+python3 -m gluefactory.scripts.run_inference \
+    --backend checkpoint --matcher none \
+    --extractor_ckpt outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --input data/output/dataset/images/nearir \
+    --output all --output_dir data/output/dataset/visualizations/custom_detections
 ```
 
-> **How it loads weights:** The script reads `checkpoint["model"]` and strips the
-> `extractor.` prefix automatically, so the standard training checkpoint works directly.
+> **How it loads weights:** `SLAMMatcher`/`load_experiment` reads `checkpoint["model"]`
+> and strips the `extractor.` prefix automatically, so the standard training checkpoint
+> works directly.
 
 ### Export Keypoints + Descriptors to H5  (`gluefactory/scripts/export_local_features.py`)
 
@@ -621,25 +617,23 @@ for name, ds in f[k].items():
 ### Visualize Keypoints on Custom Images
 
 ```bash
-python3 scripts/visualize_custom.py \
-    --image_dir  data/output/dataset/images/reflectivity \
-    --checkpoint outputs/training/superpoint_custom_run/checkpoint_best.tar \
-    --output_dir data/output/visualizations/keypoints
-
-python3 scripts/visualize_custom.py \
-    --dataset output/dataset \
-    --modality reflectivity \
-    --checkpoint outputs/training/superpoint_custom_run_0_force_true/checkpoint_best.tar
+python3 -m gluefactory.scripts.run_inference \
+    --backend checkpoint --matcher none \
+    --extractor_ckpt outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --input data/output/dataset/images/reflectivity \
+    --output all --output_dir data/output/visualizations/keypoints
 ```
 
 ### Generate Interactive Match Dashboard
 
 ```bash
-python3 scripts/export_interactive_matches.py \
-    --image_dir   data/output/dataset/images/reflectivity \
-    --h5_path     data/output/dataset/exports/custom_SP-k2048-nms4.h5 \
-    --score_threshold 0.02 \
-    --output_dir  data/output/visualizations/matches
+python3 -m gluefactory.scripts.run_inference \
+    --backend checkpoint --matcher superglue \
+    --extractor_ckpt outputs/training/superpoint_custom_run/checkpoint_best.tar \
+    --matcher_ckpt   outputs/training/superglue_custom_run/checkpoint_best.tar \
+    --input data/output/dataset/images/reflectivity \
+    --filter_threshold 0.02 \
+    --output all --output_dir data/output/visualizations/matches
 ```
 
 ---

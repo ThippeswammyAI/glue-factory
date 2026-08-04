@@ -464,6 +464,76 @@ def save_plot(path, **kw):
     plt.savefig(path, bbox_inches="tight", pad_inches=0, **kw)
 
 
+def plot_pair_matches(img0, img1, kpts0, kpts1, matches0, mscores0, out_path, title=None):
+    """Draw a side-by-side image pair with keypoints and score-coloured match
+    lines, and save it to `out_path`. Convenience wrapper around
+    `plot_images`/`plot_keypoints`/`plot_matches`/`save_plot`.
+
+    Args:
+        img0, img1: images as RGB (H, W, 3) or mono (H, W) arrays — convert
+                    BGR to RGB before calling.
+        kpts0, kpts1: [N0, 2] / [N1, 2] keypoint coordinates.
+        matches0: [N0] indices into kpts1, or -1 for unmatched keypoints.
+        mscores0: [N0] match confidence for each entry in matches0.
+        out_path: PNG path to save to.
+        title: optional title; the match count is always appended.
+    """
+    kpts0 = np.asarray(kpts0)
+    kpts1 = np.asarray(kpts1)
+    matches0 = np.asarray(matches0)
+    mscores0 = np.asarray(mscores0)
+    valid = matches0 != -1
+    mkpts0 = kpts0[valid]
+    mkpts1 = kpts1[matches0[valid]]
+
+    plot_images([img0, img1], cmaps="gray")
+    plt.gcf().patch.set_facecolor("#0b0c10")
+    plot_keypoints([kpts0, kpts1], colors=["#06b6d4", "#d946ef"], ps=6)
+    if len(mkpts0) > 0:
+        colors = plt.get_cmap("plasma")(mscores0[valid]).tolist()
+        plot_matches(mkpts0, mkpts1, color=colors, lw=1.2, ps=0)
+
+    n_matches = int(valid.sum())
+    label = f"{n_matches} matches found"
+    if title is not None:
+        label = f"{title}\n{label}"
+    add_text(0, label, pos=(0.01, 0.99), fs=13, color="#66fcf1")
+    save_plot(out_path, facecolor="#0b0c10", edgecolor="none")
+    plt.close()
+
+
+def plot_keypoints_overlay(img, kpts, scores, out_path, title=None, colorbar=False):
+    """Draw a single image with a score-coloured keypoint scatter overlay,
+    and save it to `out_path`. Convenience wrapper around
+    `plot_images`/`save_plot`.
+
+    Args:
+        img: image as RGB (H, W, 3) or mono (H, W) array.
+        kpts: [N, 2] keypoint coordinates.
+        scores: [N] keypoint confidence, used for the plasma colormap.
+        out_path: PNG path to save to.
+        title: optional title.
+        colorbar: whether to draw a colorbar for the score colormap.
+    """
+    kpts = np.asarray(kpts)
+    scores = np.asarray(scores)
+    plot_images([img], cmaps="gray")
+    fig = plt.gcf()
+    fig.patch.set_facecolor("#0b0c10")
+    ax = fig.axes[0]
+    if len(kpts) > 0:
+        sc = ax.scatter(
+            kpts[:, 0], kpts[:, 1], c=scores, cmap="plasma", s=15, alpha=0.85,
+            edgecolors="none",
+        )
+        if colorbar:
+            plt.colorbar(sc, ax=ax, label="score")
+    if title is not None:
+        add_text(0, title, pos=(0.01, 0.99), fs=13, color="#66fcf1")
+    save_plot(out_path, facecolor="#0b0c10", edgecolor="none")
+    plt.close()
+
+
 def plot_cumulative(
     errors: dict,
     thresholds: list,

@@ -4,7 +4,7 @@ Visualize SuperGlue attention maps and SuperPoint feature maps from checkpoints.
 Runs entirely on CPU — safe to use while GPU training is in progress.
 
 Usage:
-    python scripts/visualize_attention.py \
+    python -m gluefactory.scripts.visualize_attention \
         --superglue outputs/training/superglue_slam_run/checkpoint_best.tar \
         --superpoint outputs/training/superpoint_slam_run/checkpoint_best.tar \
         --img0 data/output/sample_slam/images/rgb/1775717079.407016.png \
@@ -14,15 +14,11 @@ Usage:
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
-
-# Ensure project root is importable
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from gluefactory.utils.experiments import load_experiment
 from gluefactory.visualization.attention_viz import (

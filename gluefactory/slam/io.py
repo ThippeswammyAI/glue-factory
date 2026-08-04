@@ -43,6 +43,40 @@ def load_image(path, resize_max=0):
     return img_bgr, img_gray
 
 
+_IMG_EXTS = {"*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tiff", "*.PNG", "*.JPG", "*.JPEG"}
+
+
+def _target_dirs(path):
+    """Directory itself, or its immediate subdirectories if any (skips "outputs")."""
+    subdirs = [d for d in path.iterdir() if d.is_dir()]
+    dirs = subdirs if subdirs and path.name != "outputs" else [path]
+    return [d for d in dirs if d.name != "outputs"]
+
+
+def list_images(input_path):
+    """Return sorted image file paths for a single file, an explicit
+    "img0.png,img1.png" pair, or a directory (recursing one level into
+    subdirectories, skipping "outputs").
+
+    Returns:
+        list of Path.
+    """
+    if "," in str(input_path):
+        return [Path(p.strip()) for p in str(input_path).split(",")]
+
+    path = Path(input_path)
+    if path.is_file():
+        return [path]
+    if not path.is_dir():
+        logger.error(f"Input is not a file or directory: {input_path}")
+        return []
+
+    files = []
+    for t_dir in _target_dirs(path):
+        files.extend(sorted({f for ext in _IMG_EXTS for f in t_dir.glob(ext)}))
+    return files
+
+
 def get_image_pairs(input_path):
     """Return consecutive (path0, path1) pairs from a directory or explicit pair.
 
@@ -54,27 +88,18 @@ def get_image_pairs(input_path):
     Returns:
         list of (Path, Path) tuples.
     """
-    path = Path(input_path)
-    pairs = []
-
     if "," in str(input_path):
-        parts = [Path(p.strip()) for p in str(input_path).split(",")]
-        if len(parts) == 2:
-            return [(parts[0], parts[1])]
+        parts = list_images(input_path)
+        return [(parts[0], parts[1])] if len(parts) == 2 else []
 
+    path = Path(input_path)
     if not path.is_dir():
         logger.error(f"Input is not a directory: {input_path}")
-        return pairs
+        return []
 
-    img_exts = {"*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tiff",
-                "*.PNG", "*.JPG", "*.JPEG"}
-    subdirs = [d for d in path.iterdir() if d.is_dir()]
-    target_dirs = subdirs if subdirs and path.name != "outputs" else [path]
-
-    for t_dir in target_dirs:
-        if t_dir.name == "outputs":
-            continue
-        files = sorted({f for ext in img_exts for f in t_dir.glob(ext)})
+    pairs = []
+    for t_dir in _target_dirs(path):
+        files = sorted({f for ext in _IMG_EXTS for f in t_dir.glob(ext)})
         if len(files) >= 2:
             if len(files) == 2:
                 pairs.append((files[0], files[1]))

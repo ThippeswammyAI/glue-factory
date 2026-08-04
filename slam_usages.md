@@ -1,6 +1,6 @@
 # End-to-End Pose-Aware SLAM Training & Evaluation Pipeline
 
-This guide outlines the workflows for training and evaluating **SuperPoint** and **SuperGlue** on your custom pose-aware SLAM RGB-D dataset (`data/output/slam`).
+This guide outlines the workflows for training and evaluating **SuperPoint**, **SuperGlue**, and **LightGlue** on your custom pose-aware SLAM RGB-D dataset (`data/output/slam`). All models can be exported to TorchScript (.pt) and ONNX (.onnx) formats for efficient inference in production.
 
 ---
 
@@ -15,17 +15,32 @@ Exports/pseudo_labels_slam.h5 (SuperPoint targets)
       ▼  Step 2: Train SuperPoint on SLAM images
 Outputs/training/superpoint_slam_run/checkpoint_best.tar
       │
-      ▼  Step 3: Export features with trained SP
-Exports/sp_features_slam.h5
+      ▼  Step 3: Export features & model with trained SP
+  ┌─────────────────────────────────────────────┐
+  │  Exports/sp_features_slam.h5 (for training) │
+  │  superpoint_slam.pt / .onnx (for inference) │
+  └─────────────────────────────────────────────┘
       │
-      ▼  Step 4: Generate matches & pairs for SuperGlue
-Pairs_train.txt, Pairs_val.txt, sp_features_slam.h5
+      ▼  Step 4: Generate matches & pairs
+Pairs_train.txt, Pairs_val.txt
       │
-      ▼  Step 5: Train SuperGlue on pose-based pairings
-Outputs/training/superglue_slam_run/checkpoint_best.tar
-      │
-      ▼  Step 6: Evaluate models on SLAM Evaluation Pipeline
-Metrics (mreproj_prec, mepi_prec, mrel_pose_error)
+      ├─────────────────────────────────────────┐
+      │                                         │
+      ▼                                         ▼
+Step 5a: Train SuperGlue           Step 5b: Train LightGlue
+Outputs/training/                  Outputs/training/
+  superglue_slam_run/                lightglue_slam_run/
+  checkpoint_best.tar                checkpoint_best.tar
+      │                                         │
+      ▼                                         ▼
+Step 6a: Evaluate SuperGlue        Step 6b: Evaluate LightGlue
+Metrics (mreproj_prec,             Metrics (same as SG)
+  mgt_match_recall,
+  mrel_pose_error)
+      │                                         │
+      ▼                                         ▼
+Step 7a: Export SuperGlue          Step 7b: Export LightGlue
+superglue_slam.pt / .onnx          lightglue_slam.pt / .onnx
 ```
 ---
 
@@ -107,14 +122,14 @@ Create an interactive HTML dashboard to visualize the generated pseudo-labels ov
 
 ```bash
 # --- On Sample Dataset ---
-python3 -m gluefactory.scripts.visualize_slam_labels \
+python3 -m gluefactory.scripts.visualize_slam_dataset --source labels \
     --data_dir data/output/sample_slam \
-    --max_images 50
+    --max_items 50
 
 # --- On Full Dataset ---
-python3 -m gluefactory.scripts.visualize_slam_labels \
+python3 -m gluefactory.scripts.visualize_slam_dataset --source labels \
     --data_dir data/output/slam \
-    --max_images 100
+    --max_items 100
 ```
 *   **Outputs**: `data/output/slam/visualizations/kpt_labels/index.html` (viewable in browser).
 
@@ -150,7 +165,7 @@ python3 -m gluefactory.train superpoint_sample_run \
 
 Export trained SuperPoint keypoints and descriptors to a cached `.h5` file, which will serve as the input for training SuperGlue.
 
-### Step 4a — Run the export tool
+### Step 4a — Run the feature export tool
 ```bash
 # --- Export from Full Dataset ---
 python3 -m gluefactory.scripts.export_local_features output/slam \
@@ -166,6 +181,48 @@ The training YAML expects the features to be saved in the dataset directory:
 mkdir -p data/output/slam/exports
 cp data/exports/slam_custom_SP-k2048-nms4.h5 data/output/slam/exports/sp_features_slam.h5
 ```
+
+### Step 4c — Export SuperPoint to TorchScript (.pt) or ONNX
+Export your trained SuperPoint model for inference in C++ or mobile environments.
+
+**Inference with the exported TorchScript model:**
+```bash
+python3 -m gluefactory.scripts.run_inference \
+    --backend exported --matcher none \
+    --extractor_pt superpoint_slam.pt \
+    --input data/output/slam/images/rgb/ \
+    --output all --max_pairs 10 \
+    --detection_threshold 0.01 \
+    --output_dir outputs/
+```
+
+**Output**: `outputs/images/<image>_keypoints.png` (score-coloured keypoint overlay,
+NMS-decoded via `gluefactory.models.extractors.superpoint_open`) plus an HTML grid
+and `keypoints_data.json`.
+
+**Export to TorchScript (.pt)**:
+```bash
+python3 -m gluefactory.scripts.export_model \
+    --model sp \
+    --format pt \
+    --ckpt outputs/training/superpoint_slam_run/checkpoint_best.tar \
+    --out superpoint_slam.pt \
+    --image_h 480 --image_w 640
+```
+
+**Export to ONNX (.onnx)**:
+```bash
+python3 -m gluefactory.scripts.export_model \
+    --model sp \
+    --format onnx \
+    --ckpt outputs/training/superpoint_slam_run/checkpoint_best.tar \
+    --out superpoint_slam.onnx \
+    --image_h 480 --image_w 640 \
+    --opset 16
+```
+
+*   **Input**: Image `[B, 1|3, H, W]` float32 in [0, 1]
+*   **Output**: `scores` `[B, H, W]` (NMS-filtered heatmap), `descriptors` `[B, 256, H/8, W/8]` (L2-normalised)
 
 ---
 
@@ -217,14 +274,14 @@ Visualize the overlapping match pairings side-by-side to verify alignment qualit
 
 ```bash
 # --- On Sample Dataset ---
-python3 -m gluefactory.scripts.visualize_slam_pairs \
+python3 -m gluefactory.scripts.visualize_slam_dataset --source pairs \
     --data_dir data/output/sample_slam \
-    --max_pairs 50
+    --max_items 50
 
 # --- On Full Dataset ---
-python3 -m gluefactory.scripts.visualize_slam_pairs \
+python3 -m gluefactory.scripts.visualize_slam_dataset --source pairs \
     --data_dir data/output/slam \
-    --max_pairs 50
+    --max_items 50
 ```
 *   **Outputs**: `data/output/slam/visualizations/pair_matches/index.html`.
 
@@ -273,3 +330,156 @@ python3 -m gluefactory.eval.slam \
     *   `mreproj_prec@3px`: Mean percentage of inlier keypoints with reprojection error < 3px.
     *   `mgt_match_recall@3px`: Mean match recall compared to depth-based ground truth.
     *   `mrel_pose_error`: Mean relative pose error (rotation and translation combined).
+
+---
+
+## 10. Inference with SuperGlue
+
+Run SuperGlue matching on an entire image directory and generate an interactive HTML
+dashboard, via the unified `gluefactory.scripts.run_inference` entry point (this
+replaced `scripts/match_images_from_pt.py`, `infer_superpoint.py`, `infer_superglue.py`
+— one script now covers checkpoint or exported-model inference for SuperPoint alone,
++SuperGlue, or +LightGlue).
+
+```bash
+# From the exported .pt models
+MPLBACKEND=Agg python3 -m gluefactory.scripts.run_inference \
+    --backend exported --matcher superglue \
+    --extractor_pt superpoint_slam.pt \
+    --matcher_pt   superglue_slam.pt \
+    --input data/output/slam/images/rgb \
+    --output all --output_dir data/output/slam/visualizations/match_inference_rgb \
+    --resize 640 --max_num_keypoints 512
+
+# Or straight from the training checkpoints (no export step needed)
+MPLBACKEND=Agg python3 -m gluefactory.scripts.run_inference \
+    --backend checkpoint --matcher superglue \
+    --extractor_ckpt outputs/training/superpoint_slam_run/checkpoint_best.tar \
+    --matcher_ckpt   outputs/training/superglue_slam_run/checkpoint_best.tar \
+    --input data/output/slam/images/rgb \
+    --output all --output_dir data/output/slam/visualizations/match_inference_rgb \
+    --resize 640
+
+# Swap --matcher lightglue (+ the LightGlue checkpoint/.pt) for LightGlue instead.
+```
+
+**Output**: Interactive dashboard + visualizations
+- `index.html` — interactive match browser with zoom/pan
+- `matches_data.js` — match data (keypoints, matches, scores)
+- `images/` — pair images
+- `plots/` — static PNG match visualizations
+
+---
+
+## 11. Export SuperGlue to TorchScript or ONNX
+
+Export your trained SuperGlue model for efficient inference on CPU or GPU in C++ and web environments.
+
+**Export to TorchScript (.pt)**:
+```bash
+python3 -m gluefactory.scripts.export_model \
+    --model sg \
+    --format pt \
+    --ckpt outputs/training/superglue_slam_run/checkpoint_best.tar \
+    --out superglue_slam.pt \
+    --num_kpts 512 \
+    --image_h 480 --image_w 640
+```
+
+**Export to ONNX (.onnx)**:
+```bash
+python3 -m gluefactory.scripts.export_model \
+    --model sg \
+    --format onnx \
+    --ckpt outputs/training/superglue_slam_run/checkpoint_best.tar \
+    --out superglue_slam.onnx \
+    --num_kpts 512 \
+    --image_h 480 --image_w 640 \
+    --opset 16
+```
+
+*   **Input**: `keypoints0`, `keypoints1` `[B, N, 2]` (pixel coords), `descriptors0`, `descriptors1` `[B, 256, N]`, `scores0`, `scores1` `[B, N]` (SuperGlue only), `image0`, `image1` `[B, 1, H, W]` (TorchScript) or `size0`, `size1` `[B, 2]` (ONNX)
+*   **Output**: `matches0`, `matches1` `[B, N]` (matched index or -1), `matching_scores0`, `matching_scores1` `[B, N]` (match confidence)
+
+---
+
+## 12. Train LightGlue on SLAM Pairs
+
+Train the LightGlue transformer-based matcher using the same pose-based pairs and pre-extracted SuperPoint features as SuperGlue.
+
+```bash
+# --- Train on Full Dataset ---
+python3 -m gluefactory.train lightglue_slam_run \
+    --conf gluefactory/configs/superpoint+lightglue_slam.yaml
+
+# --- Overfit check on Sample Dataset ---
+python3 -m gluefactory.train lightglue_sample_run \
+    --conf gluefactory/configs/superpoint+lightglue_slam.yaml \
+    --overfit \
+    data.data_dir=output/sample_slam \
+    data.load_features.path=output/sample_slam/exports/sp_features_slam.h5 \
+    data.num_workers=0
+```
+
+*   LightGlue offers fewer parameters and faster inference than SuperGlue while maintaining competitive accuracy.
+*   Early-stopping and point-pruning (depth/width_confidence) are **disabled** in exported models.
+
+---
+
+## 13. Evaluate/Validate LightGlue
+
+Evaluate LightGlue on the custom evaluation pipeline using the same metrics as SuperGlue.
+
+```bash
+# --- Evaluate on Sample Dataset ---
+python3 -m gluefactory.eval.slam \
+    --conf gluefactory/configs/superpoint+lightglue_slam.yaml \
+    data.data_dir=output/sample_slam \
+    data.load_features.path=output/sample_slam/exports/sp_features_slam.h5 \
+    --overwrite
+
+# --- Evaluate on Full Dataset ---
+python3 -m gluefactory.eval.slam \
+    --conf gluefactory/configs/superpoint+lightglue_slam.yaml \
+    data.data_dir=output/slam \
+    data.load_features.path=output/slam/exports/sp_features_slam.h5 \
+    --overwrite
+```
+
+*   **Key Metrics tracked** (same as SuperGlue):
+    *   `mreproj_prec@3px`: Mean percentage of inlier keypoints with reprojection error < 3px.
+    *   `mgt_match_recall@3px`: Mean match recall compared to depth-based ground truth.
+    *   `mrel_pose_error`: Mean relative pose error (rotation and translation combined).
+
+---
+
+## 14. Export LightGlue to TorchScript or ONNX
+
+Export your trained LightGlue model for efficient inference in production environments.
+
+**Export to TorchScript (.pt)**:
+```bash
+python3 -m gluefactory.scripts.export_model \
+    --model lg \
+    --format pt \
+    --ckpt outputs/training/lightglue_slam_run/checkpoint_best.tar \
+    --out lightglue_slam.pt \
+    --num_kpts 512 \
+    --image_h 480 --image_w 640
+```
+
+**Export to ONNX (.onnx)** (requires PyTorch ≥ 2.3 for full compatibility):
+```bash
+python3 -m gluefactory.scripts.export_model \
+    --model lg \
+    --format onnx \
+    --ckpt outputs/training/lightglue_slam_run/checkpoint_best.tar \
+    --out lightglue_slam.onnx \
+    --num_kpts 512 \
+    --image_h 480 --image_w 640 \
+    --opset 16
+```
+
+*   **Input**: `keypoints0`, `keypoints1` `[B, N, 2]`, `descriptors0`, `descriptors1` `[B, D, N]`, `image0`, `image1` `[B, 1, H, W]` (TorchScript) or `size0`, `size1` `[B, 2]` (ONNX)
+*   **Output**: `matches0`, `matches1` `[B, N]`, `matching_scores0`, `matching_scores1` `[B, N]`
+*   **Note**: ONNX export is **incompatible with PyTorch 2.2** due to an exporter bug with rotary attention. Use PyTorch ≥ 2.3 or stick with TorchScript.

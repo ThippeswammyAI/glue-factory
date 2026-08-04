@@ -1,196 +1,111 @@
-"""
-Run SuperPoint + SuperGlue inference on image pairs and produce an interactive
-HTML match-visualization dashboard.
+"""Self-contained HTML dashboard generation for inference-visualization scripts.
 
-Loads both models from training checkpoints, runs them on all consecutive image
-pairs in the input directory, saves per-pair static PNG plots, and writes a
-self-contained interactive dashboard (index.html + matches_data.js) to the
-output directory.
+Two flavours:
+  1) `render_dashboard`   — interactive canvas-overlay match viewer (keypoints,
+                            match lines, zoom/pan, thresholds) driven by a
+                            `matches_data.js` file. Used for SP+SuperGlue/
+                            LightGlue pair inference (`gluefactory.scripts.run_inference`).
+  2) `render_image_grid`  — a plain browsable grid of pre-rendered PNGs. Used
+                            for single-image keypoint visualizations and for
+                            the cached-H5 SLAM dataset viewer
+                            (`gluefactory.scripts.visualize_slam_dataset`).
 
-See also:
-  scripts/export_interactive_matches.py  — same inference, data-only output (no HTML)
-
-Usage:
-    MPLBACKEND=Agg python scripts/match_images.py \\
-        --input               data/output/slam/images/rgb \\
-        --checkpoint_superglue  outputs/training/superglue_slam_run/checkpoint_best.tar \\
-        --checkpoint_superpoint outputs/training/superpoint_slam_run/checkpoint_best.tar \\
-        --output_dir          data/output/slam/visualizations/match_inference_rgb \\
-        --resize 512
-
-    # Single pair:
-    MPLBACKEND=Agg python scripts/match_images.py \\
-        --input img0.png,img1.png \\
-        --checkpoint_superglue  outputs/training/superglue_slam_run/checkpoint_best.tar \\
-        --checkpoint_superpoint outputs/training/superpoint_slam_run/checkpoint_best.tar
+Previously this HTML/CSS/JS was duplicated (and already diverging) across
+scripts/match_images.py, scripts/match_images_from_pt.py,
+gluefactory/scripts/visualize_slam_pairs.py and visualize_slam_labels.py.
 """
 
-import argparse
 import json
 import logging
 from pathlib import Path
 
-import cv2
-import matplotlib.pyplot as plt
-import numpy as np
-from tqdm import tqdm
-
-from gluefactory.slam.matcher import SLAMMatcher
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("superglue_inference")
-
-DEFAULT_SUPERGLUE_CKPT = "outputs/training/superglue_slam_run/checkpoint_best.tar"
-DEFAULT_SUPERPOINT_CKPT = "outputs/training/superpoint_slam_run/checkpoint_best.tar"
-DEFAULT_INPUT_DIR = "data/output/slam/images/rgb"
-DEFAULT_OUTPUT_DIR = "data/output/slam/visualizations/match_inference_rgb"
+logger = logging.getLogger(__name__)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Test SuperGlue model inference on image pairs.")
-    parser.add_argument("--input", type=str, default=DEFAULT_INPUT_DIR)
-    parser.add_argument("--checkpoint_superglue", type=str, default=DEFAULT_SUPERGLUE_CKPT)
-    parser.add_argument("--checkpoint_superpoint", type=str, default=DEFAULT_SUPERPOINT_CKPT)
-    parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--resize", type=int, default=640)
-    parser.add_argument("--nms_radius", type=int, default=3)
-    parser.add_argument("--max_num_keypoints", type=int, default=512)
-    parser.add_argument("--detection_threshold", type=float, default=0.005)
-    parser.add_argument("--filter_threshold", type=float, default=0.01)
-    parser.add_argument("--max_pairs", type=int, default=0,
-                        help="Max pairs (0 = all)")
-    return parser.parse_args()
-
-
-def plot_matches(img0, img1, kpts0, kpts1, matches, mscores, output_path, title="SuperGlue Matches"):
-    """Plot static matches side-by-side."""
-    h0, w0 = img0.shape[:2]
-    h1, w1 = img1.shape[:2]
-    canvas = np.zeros((max(h0, h1), w0 + w1, 3), dtype=np.uint8)
-    canvas[:h0, :w0] = img0
-    canvas[:h1, w0:w0 + w1] = img1
-
-    fig, ax = plt.subplots(figsize=(16, 9), dpi=150)
-    fig.patch.set_facecolor("#0b0c10")
-    ax.set_facecolor("#0b0c10")
-    ax.axis("off")
-    ax.imshow(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
-    ax.scatter(kpts0[:, 0], kpts0[:, 1], c="#06b6d4", s=10, edgecolors="none", alpha=0.8)
-    ax.scatter(kpts1[:, 0] + w0, kpts1[:, 1], c="#d946ef", s=10, edgecolors="none", alpha=0.8)
-    count = 0
-    for idx0, idx1 in enumerate(matches):
-        if idx1 == -1:
-            continue
-        p0, p1 = kpts0[idx0], kpts1[idx1]
-        color = plt.cm.plasma(mscores[idx0])
-        ax.plot([p0[0], p1[0] + w0], [p0[1], p1[1]], color=color, linewidth=1.2, alpha=0.85)
-        count += 1
-    ax.set_title(f"{title}\n{count} matches found", color="#66fcf1", fontsize=16, weight="bold", pad=12)
-    plt.savefig(output_path, bbox_inches="tight", facecolor=fig.get_facecolor(), edgecolor="none")
-    plt.close()
-
-
-def main():
-    args = parse_args()
-
-    sg_ckpt = Path(args.checkpoint_superglue)
-    sp_ckpt = Path(args.checkpoint_superpoint)
-    if not sg_ckpt.exists():
-        logger.error(f"SuperGlue checkpoint not found: {sg_ckpt}")
-        return
-    if not sp_ckpt.exists():
-        logger.error(f"SuperPoint checkpoint not found: {sp_ckpt}")
-        return
-
-    conf = {
-        "nms_radius": args.nms_radius,
-        "max_num_keypoints": args.max_num_keypoints,
-        "detection_threshold": args.detection_threshold,
-        "filter_threshold": args.filter_threshold,
-    }
-    matcher = SLAMMatcher(sg_ckpt, sp_ckpt, conf=conf)
-    max_pairs = args.max_pairs if args.max_pairs > 0 else None
-    results = matcher.match_directory(args.input, max_pairs=max_pairs, resize=args.resize)
-
-    if not results:
-        logger.error("No pairs were matched.")
-        return
-
-    out_dir = Path(args.output_dir)
-    images_out_dir = out_dir / "images"
-    plots_out_dir = out_dir / "plots"
-    images_out_dir.mkdir(parents=True, exist_ok=True)
-    plots_out_dir.mkdir(parents=True, exist_ok=True)
-
-    dashboard_data = []
-    for r in tqdm(results, desc="Saving plots"):
-        idx = r["idx"]
-        img0_name = f"pair_{idx}_view0.png"
-        img1_name = f"pair_{idx}_view1.png"
-        cv2.imwrite(str(images_out_dir / img0_name), r["img0_bgr"])
-        cv2.imwrite(str(images_out_dir / img1_name), r["img1_bgr"])
-
-        plot_name = f"pair_{idx}_matches.png"
-        plot_matches(
-            r["img0_bgr"], r["img1_bgr"],
-            r["keypoints0"], r["keypoints1"],
-            r["matches0"], r["mscores0"],
-            plots_out_dir / plot_name,
-            title=f"Matches: {r['name0']} ↔ {r['name1']}",
-        )
-
-        matches_list = [
-            [int(i0), int(i1), float(r["mscores0"][i0])]
-            for i0, i1 in enumerate(r["matches0"]) if i1 != -1
-        ]
-        m = r["metrics"]
-        logger.info(
-            f"Pair {idx}: {r['name0']} ↔ {r['name1']}  "
-            f"kpts {m['total_kpts0']}/{m['total_kpts1']}  "
-            f"matches {m['num_matches']} ({m['match_ratio']:.1%})  "
-            f"avg {m['avg_mscore']:.2f}"
-        )
-        dashboard_data.append({
-            "idx": idx,
-            "name0": r["name0"],
-            "name1": r["name1"],
-            "image0_url": f"images/{img0_name}",
-            "image1_url": f"images/{img1_name}",
-            "plot_url": f"plots/{plot_name}",
-            "keypoints0": r["keypoints0"].tolist(),
-            "keypoints1": r["keypoints1"].tolist(),
-            "scores0": r["scores0"].tolist(),
-            "scores1": r["scores1"].tolist(),
-            "matches": matches_list,
-            "metrics": m,
-            "image_width": r["img0_bgr"].shape[1],
-            "image_height": r["img0_bgr"].shape[0],
-        })
-
-    js_path = out_dir / "matches_data.js"
-    with open(js_path, "w") as f:
+def write_matches_data(out_dir, records, filename="matches_data.js"):
+    """Write `records` as `const MATCHES_DATA = [...];` to `out_dir/filename`."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / filename
+    with open(path, "w") as f:
         f.write("const MATCHES_DATA = ")
-        json.dump(dashboard_data, f, indent=2)
+        json.dump(records, f, indent=2)
         f.write(";\n")
-    logger.info(f"Dashboard data saved to {js_path}")
+    logger.info(f"Saved {len(records)} record(s) → {path}")
+    return path
 
+
+def render_dashboard(out_dir, records, title="Match Visualizer"):
+    """Write `matches_data.js` plus an interactive canvas-overlay `index.html`.
+
+    Each record is expected to have: idx, name0, name1, image0_url, image1_url,
+    keypoints0, keypoints1, scores0, scores1, matches (list of [i0, i1, score]),
+    metrics (dict), image_width, image_height.
+    """
+    out_dir = Path(out_dir)
+    write_matches_data(out_dir, records)
     html_path = out_dir / "index.html"
-    with open(html_path, "w") as f:
-        f.write(get_html_template())
+    html_path.write_text(_MATCH_DASHBOARD_HTML.replace("{{TITLE}}", title))
     logger.info(f"Interactive dashboard generated at {html_path}")
-
-    print(f"\nTotal processed pairs: {len(dashboard_data)}")
-    print(f"Results: {out_dir.resolve()}")
-    print(f"Dashboard: file://{html_path.resolve()}\n")
+    return html_path
 
 
-def get_html_template():
-    return """<!DOCTYPE html>
+def render_image_grid(out_dir, image_paths, title="Visualization", grid_min_width=800,
+                       out_name="index.html"):
+    """Write a plain browsable HTML grid of PNGs already saved under `out_dir`.
+
+    Args:
+        out_dir: directory the images live in (and where index.html is written).
+        image_paths: paths to the images, used only for their basename (assumed
+                     to already sit directly under `out_dir`).
+        title: page title / heading.
+        grid_min_width: CSS grid-template-columns minmax() width, in px.
+        out_name: output HTML filename.
+    """
+    out_dir = Path(out_dir)
+    items = "\n".join(
+        f'        <div class="item"><h2>{p.name}</h2>'
+        f'<img src="{p.name}" alt="{p.name}"></div>'
+        for p in image_paths
+    )
+    html = _IMAGE_GRID_HTML.replace("{{TITLE}}", title) \
+        .replace("{{GRID_MIN_WIDTH}}", str(grid_min_width)) \
+        .replace("{{ITEMS}}", items)
+    html_path = out_dir / out_name
+    html_path.write_text(html)
+    logger.info(f"Generated HTML grid at {html_path}")
+    return html_path
+
+
+_IMAGE_GRID_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{TITLE}}</title>
+    <style>
+        body { font-family: sans-serif; background-color: #121212; color: #ffffff; padding: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax({{GRID_MIN_WIDTH}}px, 1fr)); gap: 20px; }
+        .item { background: #1e1e1e; padding: 15px; border-radius: 8px; text-align: center; }
+        img { max-width: 100%; height: auto; border-radius: 4px; }
+        h2 { color: #bb86fc; font-size: 1.2em; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h1>{{TITLE}}</h1>
+    <div class="grid">
+{{ITEMS}}
+    </div>
+</body>
+</html>
+"""
+
+
+_MATCH_DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SuperGlue Custom Inference Visualizer</title>
+    <title>{{TITLE}}</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -274,7 +189,7 @@ def get_html_template():
 <body>
     <div id="loader" class="loader">Loading Dashboard Data...</div>
     <div class="sidebar">
-        <div class="sidebar-header"><h1>SuperGlue Visualizer</h1><p>Custom Training Model Inference</p></div>
+        <div class="sidebar-header"><h1>{{TITLE}}</h1><p>Model Inference Visualizer</p></div>
         <div class="pair-list-title">Image Pairs</div>
         <div class="pair-list" id="pair-list"></div>
     </div>
@@ -400,7 +315,3 @@ def get_html_template():
 </body>
 </html>
 """
-
-
-if __name__ == "__main__":
-    main()
