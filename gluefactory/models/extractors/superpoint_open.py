@@ -57,6 +57,48 @@ def select_top_k_keypoints(keypoints, scores, k):
     return keypoints[indices], scores
 
 
+def warp_grid_3d(centers0, idx, data):
+    """Warp a grid of points from view0 to view1 using depth + relative pose.
+
+    Returns the warped pixel coordinates and a validity mask (depth valid and
+    projection in front of the camera). In-bounds filtering is done by the caller.
+    """
+    depth0 = data["view0"]["depth"][idx].float()
+    cam0 = data["view0"]["camera"][idx]
+    cam1 = data["view1"]["camera"][idx]
+    T_0to1 = data["T_0to1"][idx]
+
+    device = centers0.device
+    h0, w0 = depth0.shape
+    norm = torch.stack(
+        [
+            centers0[:, 0] / (w0 - 1) * 2 - 1,
+            centers0[:, 1] / (h0 - 1) * 2 - 1,
+        ],
+        dim=-1,
+    )
+    z0 = torch.nn.functional.grid_sample(
+        depth0[None, None].to(device),
+        norm[None, None],
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=True,
+    )[0, 0, 0]
+
+    # Back-project to 3D in view0's camera frame
+    norm_pts = (centers0 - cam0.c) / cam0.f
+    p3d0 = torch.cat([norm_pts, torch.ones_like(norm_pts[:, :1])], dim=-1) * z0[:, None]
+
+    # Transform to view1's camera frame and project to pixels
+    p3d1 = T_0to1.transform(p3d0)
+    z1 = p3d1[:, 2]
+    valid = (z0 > 0) & (z1 > cam1.eps)
+    z1 = z1.clamp(min=cam1.eps)
+    p2d1 = p3d1[:, :2] / z1[:, None] * cam1.f + cam1.c
+
+    return p2d1, valid
+
+
 class VGGBlock(nn.Sequential):
     def __init__(self, c_in, c_out, kernel_size, relu=True):
         padding = (kernel_size - 1) // 2
@@ -244,8 +286,8 @@ class SuperPoint(BaseModel):
                     continue
                 xi = torch.clamp(torch.floor(kpts[:, 0]).long(), 0, w - 1)
                 yi = torch.clamp(torch.floor(kpts[:, 1]).long(), 0, h - 1)
-                cx = xi // 8
-                cy = yi // 8
+                cx = torch.clamp(xi // 8, 0, wc - 1)
+                cy = torch.clamp(yi // 8, 0, hc - 1)
                 ix = xi % 8
                 iy = yi % 8
                 label = iy * 8 + ix
@@ -278,6 +320,13 @@ class SuperPoint(BaseModel):
         h, w = hc * 8, wc * 8
         device = desc0.device
 
+        use_depth = (
+            "T_0to1" in data
+            and data["view0"].get("depth") is not None
+            and data["view1"].get("depth") is not None
+        )
+        use_homography = "H_0to1" in data
+
         # Create a grid of cell centers
         grid_y, grid_x = torch.meshgrid(
             torch.arange(hc, device=device),
@@ -288,19 +337,26 @@ class SuperPoint(BaseModel):
         centers0 = centers0.reshape(-1, 2)
         centers1 = centers0.clone()
 
-        H_0to1 = data["H_0to1"]
         loss_desc = 0.0
         zeros = torch.tensor(0.0, device=device)
 
         for i in range(b):
-            warped_centers0 = warp_points_torch(centers0[None], H_0to1[i], inverse=False)[0]
-            dist = torch.norm(warped_centers0[:, None, :] - centers1[None, :, :], dim=-1)
-            Y = (dist < 8.0).float()
-            
-            # Filter points warping outside image bounds
-            valid_warp = (warped_centers0[:, 0] >= 0) & (warped_centers0[:, 0] < w) & \
+            if use_depth:
+                warped_centers0, valid_warp = warp_grid_3d(centers0, i, data)
+            elif use_homography:
+                warped_centers0 = warp_points_torch(
+                    centers0[None], data["H_0to1"][i], inverse=False
+                )[0]
+                valid_warp = torch.ones(len(warped_centers0), dtype=torch.bool, device=device)
+            else:
+                continue  # no correspondence source, skip descriptor loss
+
+            # Filter points warping outside the descriptor grid
+            valid_warp = valid_warp & (warped_centers0[:, 0] >= 0) & (warped_centers0[:, 0] < w) & \
                          (warped_centers0[:, 1] >= 0) & (warped_centers0[:, 1] < h)
-            Y = Y * valid_warp[:, None]
+
+            dist = torch.norm(warped_centers0[:, None, :] - centers1[None, :, :], dim=-1)
+            Y = (dist < 8.0).float() * valid_warp[:, None]
 
             # Cosine similarity between dense descriptors
             d0 = desc0[i].reshape(c, -1)

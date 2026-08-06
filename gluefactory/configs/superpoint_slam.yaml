@@ -7,22 +7,22 @@ data:
   depth_format: png
   train_size: 1400
   val_size: 282
-  batch_size: 4
+  batch_size: 1
   num_workers: 14
   preprocessing:
-    resize: 512
+    resize: null
     side: long
   load_features:
     do: True
     path: output/slam/exports/pseudo_labels_slam.h5
-    padding_length: 512
+    padding_length: 1024
     padding_fn: pad_local_features
 
 model:
   name: two_view_pipeline
   extractor:
     name: extractors.superpoint_open
-    max_num_keypoints: 512
+    max_num_keypoints: 1024
     force_num_keypoints: True
     detection_threshold: -1
     nms_radius: 4
