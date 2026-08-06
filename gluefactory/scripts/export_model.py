@@ -188,6 +188,8 @@ class _SuperPointExtractor(nn.Module):
         self.detector = model.detector
         self.descriptor = model.descriptor
         self.stride = model.stride
+        self.nms_r = model.conf.nms_radius
+        self.rm_b = model.conf.remove_borders
 
     def forward(self, image: torch.Tensor):
         if image.shape[1] == 3:
@@ -205,6 +207,29 @@ class _SuperPointExtractor(nn.Module):
         k = self.stride
         scores = scores.permute(0, 2, 3, 1).reshape(b, h, w, k, k)
         scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h * k, w * k)
+
+        # batched NMS (2-pass, same as superpoint_open.py)
+        r = self.nms_r
+        def mp(x):
+            return torch.nn.functional.max_pool2d(
+                x.unsqueeze(1), 2 * r + 1, stride=1, padding=r
+            ).squeeze(1)
+        z = torch.zeros_like(scores)
+        mm = scores == mp(scores)
+        for _ in range(2):
+            sup = mp(mm.float()) > 0
+            ss = torch.where(sup, z, scores)
+            mm = mm | ((ss == mp(ss)) & ~sup)
+        scores = torch.where(mm, scores, z)
+
+        # border zeroing
+        p = self.rm_b
+        mask = torch.ones_like(scores, dtype=torch.bool)
+        mask[:, :p] = False
+        mask[:, -p:] = False
+        mask[:, :, :p] = False
+        mask[:, :, -p:] = False
+        scores = torch.where(mask, scores, z)
 
         return scores, descriptors
 
