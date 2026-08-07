@@ -125,10 +125,15 @@ def save_experiment(
         )
     logger.info(f"Saving checkpoint {cp_name}")
     cp_path = str(output_dir / cp_name)
-    torch.save(checkpoint, cp_path)
+    tmp_path = cp_path + ".tmp"
+    torch.save(checkpoint, tmp_path)
+    os.replace(tmp_path, cp_path)
     if cp_name != "checkpoint_best.tar" and results[conf.train.best_key] < best_eval:
         best_eval = results[conf.train.best_key]
         logger.info(f"New best val: {conf.train.best_key}={best_eval}")
-        shutil.copy(cp_path, str(output_dir / "checkpoint_best.tar"))
+        best_path = str(output_dir / "checkpoint_best.tar")
+        tmp_best_path = best_path + ".tmp"
+        shutil.copy(cp_path, tmp_best_path)
+        os.replace(tmp_best_path, best_path)
     delete_old_checkpoints(output_dir, conf.train.keep_last_checkpoints)
     return best_eval

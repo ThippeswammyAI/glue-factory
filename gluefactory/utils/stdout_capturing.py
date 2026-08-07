@@ -85,6 +85,7 @@ def capture_outputs(filename, cleanup_interval=None):
                     self.function(*self.args, **self.kwargs)
 
         timer = RepeatTimer(cleanup_interval, lambda: cleanup(filename))
+        timer.daemon = True
         timer.start()
     else:
         timer = None
@@ -130,8 +131,12 @@ def capture_outputs(filename, cleanup_interval=None):
             os.dup2(saved_stdout_fd, original_stdout_fd)
             os.dup2(saved_stderr_fd, original_stderr_fd)
 
-            tee_stdout.wait(timeout=1)
-            tee_stderr.wait(timeout=1)
+            for tee in (tee_stdout, tee_stderr):
+                try:
+                    tee.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    tee.kill()
+                    tee.wait()
             os.close(saved_stdout_fd)
             os.close(saved_stderr_fd)
 

@@ -5,6 +5,7 @@ See mnist.py for an example of dataset.
 
 import collections
 import logging
+import signal
 from abc import ABCMeta, abstractmethod
 
 import omegaconf
@@ -35,6 +36,10 @@ class LoopSampler(Sampler):
 
 
 def worker_init_fn(i):
+    # Forked workers inherit the main process's SIGINT handler, which
+    # otherwise makes every worker log and react to Ctrl+C on its own.
+    # Restore default handling so only the main process manages termination.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     info = get_worker_info()
     if hasattr(info.dataset, "conf"):
         conf = info.dataset.conf

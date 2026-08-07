@@ -103,7 +103,11 @@ class CacheLoader(BaseModel):
             fpath = self.conf.path.format(**{k: data[k][i] for k in var_names})
             if self.conf.add_data_path:
                 fpath = DATA_PATH / fpath
-            hfile = h5py.File(str(fpath), "r")
+            fpath = str(fpath)
+            hfile = self.hfiles.get(fpath)
+            if hfile is None:
+                hfile = h5py.File(fpath, "r")
+                self.hfiles[fpath] = hfile
             if name in hfile:
                 grp = hfile[name]
             elif Path(name).name in hfile:
@@ -152,7 +156,6 @@ class CacheLoader(BaseModel):
             if self.padding_fn is not None:
                 pred = self.padding_fn(pred, self.conf.padding_length)
             preds.append(pred)
-            hfile.close()
         if self.conf.collate:
             return batch_to_device(collate(preds), device)
         else:
